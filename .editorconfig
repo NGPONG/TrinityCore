@@ -1,11 +1,26 @@
 [*]
 charset = utf-8
+indent_style = space
 indent_size = 4
 tab_width = 4
-indent_style = space
 insert_final_newline = true
 trim_trailing_whitespace = true
-max_line_length = 80
+max_line_length = 0
 
-[*.{c,h,cpp,hpp,inl}]
-charset = latin1
+[doc_*]
+charset = utf-8
+indent_style = space
+indent_size = 2
+tab_width = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 0
+
+[*.{json,ts,js,yml,sh,cmake}]
+charset = utf-8
+indent_style = space
+indent_size = 2
+tab_width = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 0
