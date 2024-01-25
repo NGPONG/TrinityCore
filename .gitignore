@@ -23,4 +23,4 @@ nbproject/*
 cmake-build-*/
 .vs
 *.user
-/etc
+/env
