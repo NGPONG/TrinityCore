@@ -18,6 +18,7 @@ if(USE_COREPCH)
   set(PRIVATE_PCH_HEADER PrecompiledHeaders/databasePCH.h)
 endif()
 
+# IDE 支持
 GroupSources(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(database

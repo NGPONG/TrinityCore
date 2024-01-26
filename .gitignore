@@ -23,4 +23,6 @@ nbproject/*
 cmake-build-*/
 .vs
 *.user
+/.cache
 /env
+/compile_commands.json

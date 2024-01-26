@@ -10,9 +10,11 @@
 
 message("")
 
+# 获取 scripts 下的所有文件夹
 # Make the script module list available in the current scope
 GetScriptModuleList(SCRIPT_MODULE_LIST)
 
+# 安装位置，unix 下默认为: ${CMAKE_INSTALL_PREFIX}/bin/scripts
 # Make the native install offset available in this scope
 GetInstallOffset(INSTALL_OFFSET)
 
@@ -27,6 +29,8 @@ elseif(SCRIPTS MATCHES "static")
 else()
   set(SCRIPTS_DEFAULT_LINKAGE "disabled")
 endif()
+
+# minimal 的 SCRIPTS 的配置仅包含 Commands Spells 这两种 script
 # Sets SCRIPTS_USE_WHITELIST
 # Sets SCRIPTS_WHITELIST
 if(SCRIPTS MATCHES "minimal")
@@ -39,6 +43,8 @@ endif()
 # variables set above
 foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
   ScriptModuleNameToVariable(${SCRIPT_MODULE} SCRIPT_MODULE_VARIABLE)
+  # 设置 SCRIPTS_<SCRIPT_NAME> 相关的变量
+  # 这里设置的不是 cache variable，它们是临时的
   if(${SCRIPT_MODULE_VARIABLE} STREQUAL "default")
     if(SCRIPTS_USE_WHITELIST)
       list(FIND SCRIPTS_WHITELIST "${SCRIPT_MODULE}" INDEX)
@@ -51,6 +57,7 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
       set(${SCRIPT_MODULE_VARIABLE} ${SCRIPTS_DEFAULT_LINKAGE})
     endif()
   endif()
+
   # Build the Graph values
   if(${SCRIPT_MODULE_VARIABLE} MATCHES "dynamic")
     GetProjectNameOfScriptModule(${SCRIPT_MODULE} SCRIPT_MODULE_PROJECT_NAME)
@@ -68,6 +75,8 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
     list(APPEND GRAPH_VALUE_CONTAINS_MODULES_disabled ${SCRIPT_MODULE})
   endif()
 endforeach()
+
+# GRAPH_KEYS: scripts_commands;scripts_custom;scripts_easternkingdoms;scripts_events;scripts_kalimdor;scripts_northrend;scripts_outdoorpvp;scripts_outland;scripts_pet;scripts_spells;scripts_world
 
 list(SORT GRAPH_KEYS)
 list(REMOVE_DUPLICATES GRAPH_KEYS)
@@ -88,11 +97,13 @@ foreach(GRAPH_KEY ${GRAPH_KEYS})
   message("    |")
 endforeach()
 
+# precompile header 支持
 # Base sources which are used by every script project
 if(USE_SCRIPTPCH)
   set(PRIVATE_PCH_HEADER ScriptPCH.h)
 endif()
 
+# IDE 支持
 GroupSources(${CMAKE_CURRENT_SOURCE_DIR})
 
 # Configures the scriptloader with the given name and stores the output in the LOADER_OUT variable.
@@ -198,10 +209,17 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
   endif()
 endforeach()
 
+# DYNAMIC_SCRIPT_MODULE_PROJECTS: scripts_commands;scripts_custom;scripts_easternkingdoms;scripts_events;scripts_kalimdor;scripts_northrend;scripts_outdoorpvp;scripts_outland;scripts_pet;scripts_spells;scripts_world
+# WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES: scripts_commands;scripts_custom;scripts_easternkingdoms;scripts_events;scripts_kalimdor;scripts_northrend;scripts_outdoorpvp;scripts_outland;scripts_pet;scripts_spells;scripts_world
+
 # Add the dynamic script modules to the worldserver as dependency
 set(WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES ${DYNAMIC_SCRIPT_MODULE_PROJECTS} PARENT_SCOPE)
 
 ConfigureScriptLoader("static" SCRIPT_MODULE_PRIVATE_SCRIPTLOADER OFF ${STATIC_SCRIPT_MODULES})
+
+# 配置 static scripts 的 ScriptLoader.h
+# 如果启用了 static 的编译配置，则将所有 scripts 都编译在这
+# scripts 其实就是 scripts loader
 
 add_library(scripts STATIC
   ScriptLoader.h

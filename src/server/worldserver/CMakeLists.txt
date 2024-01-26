@@ -70,6 +70,7 @@ set_target_properties(worldserver
       FOLDER
         "server")
 
+# 如果 scripts 被编译为 dymanic，则需要追加依赖关系
 # Add all dynamic projects as dependency to the worldserver
 if(WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES)
   add_dependencies(worldserver ${WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES})

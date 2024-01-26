@@ -1,0 +1,71 @@
+prepare:
+  * 编译和安装：
+    * $ mkdir -p build env/bin env/lib env/etc
+    * $ cmake .. \
+          -DCMAKE_INSTALL_PREFIX=/home/ngpong/TrinityCore/env/ \
+          -DSERVERS=ON \
+          -DTOOLS=ON \
+          -DSCRIPTS=dynamic \
+          -DUSE_COREPCH=ON \
+          -DUSE_SCRIPTPCH=ON \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DWITH_COREDEBUG=OFF \
+          -DWITH_DYNAMIC_LINKING=ON \
+          -DWITH_WARNINGS=ON \
+          -DCMAKE_C_COMPILER=/usr/bin/clang \
+          -DCMAKE_CXX_COMPILER=/usr/bin/clang++
+    * 关于编译选项参照 CMakeLists.txt 文件开头部分的注释信息
+    * cmake --build . -j 16
+    * cmake --install .\
+  * 设置：
+    * 设置地图、相机等数据：
+      * 准备：
+        * $ mkdir -p env/data
+        * $ cd env/data
+      * 下载：
+        * curl -LJO https://tc.arctium.io/3.3.5a/Cameras.zip && \
+          curl -LJO https://tc.arctium.io/3.3.5a/dbc.zip && \
+          curl -LJO https://tc.arctium.io/3.3.5a/maps.zip && \
+          curl -LJO https://tc.arctium.io/3.3.5a/mmaps.zip && \
+          curl -LJO https://tc.arctium.io/3.3.5a/vmaps.zip
+      * 解压：
+        * unzip Cameras.zip
+        * unzip dbc.zip
+        * unzip maps.zip
+        * unzip mmaps.zip
+        * unzip vmaps.zip
+      * 卸载:
+        * rm -rf Cameras.zip dbc.zip maps.zip mmaps.zip vmaps.zip
+    * 设置配置文件：
+      * 准备：
+        * $ mkdir -p env/log
+        * $ cd env/etc
+        * $ mv authserver.conf.dist authserver.conf
+        * $ mv worldserver.conf.dist worldserver.conf
+      * 修改配置：
+        * LoginDatabaseInfo, WorldDatabaseInfo, CharacterDatabaseInfo
+        * LogsDir = "/home/ngpong/TrinityCore/env/log"
+        * DataDir = "/home/ngpong/TrinityCore/env/data"
+    * 设置数据库：
+      * 准备：
+        * $ cd env/bin
+      * 下载：
+        * $ curl -LJO https://github.com/TrinityCore/TrinityCore/releases/download/TDB335.24011/TDB_full_world_335.24011_2024_01_21.7z
+      * 解压：
+        * $ p7zip -d ./TDB_full_world_335.24011_2024_01_21.7z
+      * 配置
+        * $ mycli -e "source ~/TrinityCore/sql/create/create_mysql.sql"
+        * 在第一次启动服务器时会自动检测可执行文件当前目录下的 TDB_<...> sql 文件，如果数据库为空则使用这个文件填充
+        * 在第一次启动完成服务器后，关闭服务器，然后修改 auth.realmlist 的 address 字段为本机 IP
+  * 运行:
+    * $ cd env/bin
+    * $ ./authserver
+    * $ ./worldserver
+
+GM命令：
+  * 创建账号：account create <account> <password>
+  * 设置GM账号：account set gmlevel <account> <gmlevel:3> <realmid:1>
+  *
+
+
+* 配置文件被我修改过的字段添加 NGPONG 的注释信息
