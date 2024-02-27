@@ -108,12 +108,14 @@ private:
 QueryCallback::QueryCallback(std::future<QueryResult>&& result)
 {
     _isPrepared = false;
+    // placement new to construct _string
     Construct(_string, std::move(result));
 }
 
 QueryCallback::QueryCallback(std::future<PreparedQueryResult>&& result)
 {
     _isPrepared = true;
+    // placement new to construct _prepared
     Construct(_prepared, std::move(result));
 }
 

@@ -22,12 +22,15 @@
 #include "ObjectRegistry.h"
 #include "TypeList.h"
 
+// T = CreatureAI
+// O = Creature
 /** FactoryHolder holds a factory object of a specific type
  */
 template<class T, class O, class Key = std::string>
 class FactoryHolder
 {
     public:
+        // ObjectRegistry<FactoryHolder<CreatureAI, Creature, std::string>, std::string>
         typedef ObjectRegistry<FactoryHolder<T, O, Key>, Key> FactoryHolderRegistry;
 
         explicit FactoryHolder(Key const& k) : _key(k) { }

@@ -218,9 +218,22 @@ bool DBUpdater<T>::Update(DatabaseWorkerPool<T>& pool)
         return false;
     }
 
-    UpdateFetcher updateFetcher(sourceDirectory, [&](std::string const& query) { DBUpdater<T>::Apply(pool, query); },
-        [&](Path const& file) { DBUpdater<T>::ApplyFile(pool, file); },
-            [&](std::string const& query) -> QueryResult { return DBUpdater<T>::Retrieve(pool, query); });
+    UpdateFetcher updateFetcher
+    (
+        sourceDirectory,
+        [&](std::string const& query)
+        {
+            DBUpdater<T>::Apply(pool, query);
+        },
+        [&](Path const& file)
+        {
+            DBUpdater<T>::ApplyFile(pool, file);
+        },
+        [&](std::string const& query) -> QueryResult
+        {
+            return DBUpdater<T>::Retrieve(pool, query);
+        }
+    );
 
     UpdateResult result;
     try

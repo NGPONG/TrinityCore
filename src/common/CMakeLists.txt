@@ -80,7 +80,8 @@ target_link_libraries(common
     valgrind
     threads
     jemalloc
-    short_alloc)
+    short_alloc
+    magic_enum)
 
 # 添加依赖项，确保 src/genrev/CMakeLists.txt 里面 cmake 的 revision_data.h 执行完后才会编译当前 target
 add_dependencies(common revision_data.h)

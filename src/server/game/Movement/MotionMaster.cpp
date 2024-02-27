@@ -293,6 +293,7 @@ void MotionMaster::Update(uint32 diff)
     if (!_owner)
         return;
 
+    // 初始化状态不执行
     if (HasFlag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING | MOTIONMASTER_FLAG_INITIALIZING))
         return;
 
@@ -323,6 +324,7 @@ void MotionMaster::Update(uint32 diff)
 
     RemoveFlag(MOTIONMASTER_FLAG_UPDATE);
 
+    // 有一些移动路径生成器是延迟添加的，在每次 ticke 的时候把它们都加上，以便下一次 tick 的时候能够使用最新的生成器
     ResolveDelayedActions();
 }
 

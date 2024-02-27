@@ -75,6 +75,9 @@ static ChatSubCommandMap COMMAND_MAP;
 /*static*/ void Trinity::Impl::ChatCommands::ChatCommandNode::LoadCommandMap()
 {
     InvalidateCommandMap();
+
+    // GetChatCommands 遍历所有 CommandScript 类别的 script，并调用其 GetCommands 函数
+    // 此处应该是加载 COMMAND_MAP，就是命令表
     LoadCommandsIntoMap(nullptr, COMMAND_MAP, sScriptMgr->GetChatCommands());
 
     if (PreparedQueryResult result = WorldDatabase.Query(WorldDatabase.GetPreparedStatement(WORLD_SEL_COMMANDS)))

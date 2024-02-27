@@ -36,6 +36,9 @@
 // forward declaration
 template<class A, class T, class O> class GridLoader;
 
+// ACTIVE_OBJECT      = Player
+// WORLD_OBJECT_TYPES = TypeList<Player, TypeList<Creature, TypeList<Corpse, TypeList<DynamicObject, TypeNull>>>>
+// GRID_OBJECT_TYPES  = TypeList<GameObject, TypeList<Creature, TypeList<DynamicObject, TypeList<Corpse, TypeNull>>>>
 template
 <
 class ACTIVE_OBJECT,

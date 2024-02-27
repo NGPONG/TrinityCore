@@ -241,6 +241,8 @@ void DelayedUnitRelocation::Visit(PlayerMapType &m)
 
 void AIRelocationNotifier::Visit(CreatureMapType &m)
 {
+    // AI 触发相关的，类似玩家进入了生物的某种视野之类的话会触发一些AI执行逻辑
+
     for (CreatureMapType::iterator iter = m.begin(); iter != m.end(); ++iter)
     {
         Creature* c = iter->GetSource();
@@ -255,9 +257,12 @@ void MessageDistDeliverer::Visit(PlayerMapType &m)
     for (PlayerMapType::iterator iter = m.begin(); iter != m.end(); ++iter)
     {
         Player* target = iter->GetSource();
+
+        // 相同的游戏区域？
         if (!target->InSamePhase(i_phaseMask))
             continue;
 
+        // 目标对象与当前玩家的直线距离不能大于 i_distSq
         if (required3dDist)
         {
             if (target->GetExactDistSq(i_source) > i_distSq)
@@ -269,6 +274,7 @@ void MessageDistDeliverer::Visit(PlayerMapType &m)
                 continue;
         }
 
+        // 发送给共享视野的玩家
         // Send packet to all who are sharing the player's vision
         if (target->HasSharedVision())
         {
@@ -278,6 +284,7 @@ void MessageDistDeliverer::Visit(PlayerMapType &m)
                     SendPacket(*i);
         }
 
+        // 发送给目标玩家位置更新
         if (target->m_seer == target || target->GetVehicle())
             SendPacket(target);
     }

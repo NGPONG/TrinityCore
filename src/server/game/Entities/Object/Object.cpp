@@ -1052,6 +1052,7 @@ void WorldObject::UpdatePositionData()
 {
     PositionFullTerrainStatus data;
     GetMap()->GetFullTerrainStatusForPosition(GetPhaseMask(), GetPositionX(), GetPositionY(), GetPositionZ(), data, MAP_ALL_LIQUIDS, GetCollisionHeight());
+
     ProcessPositionDataChanged(data);
 }
 
@@ -1109,14 +1110,17 @@ float WorldObject::GetDistanceZ(WorldObject const* obj) const
 
 bool WorldObject::_IsWithinDist(WorldObject const* obj, float dist2compare, bool is3D, bool incOwnRadius, bool incTargetRadius) const
 {
+    // 计算大小因子，检测是否包含我方或地方的战斗触发范围
     float sizefactor = 0;
     sizefactor += incOwnRadius ? GetCombatReach() : 0.0f;
     sizefactor += incTargetRadius ? obj->GetCombatReach() : 0.0f;
+
     float maxdist = dist2compare + sizefactor;
 
     Position const* thisOrTransport = this;
     Position const* objOrObjTransport = obj;
 
+    // 包含传送工具时的检测
     if (GetTransport() && obj->GetTransport() && obj->GetTransport()->GetGUID().GetCounter() == GetTransport()->GetGUID().GetCounter())
     {
         thisOrTransport = &m_movementInfo.transport.pos;
@@ -1124,6 +1128,7 @@ bool WorldObject::_IsWithinDist(WorldObject const* obj, float dist2compare, bool
     }
 
     if (is3D)
+        // 计算记录，计算caster与受害者之间的相对距离是否 < maxdist
         return thisOrTransport->IsInDist(objOrObjTransport, maxdist);
     else
         return thisOrTransport->IsInDist2d(objOrObjTransport, maxdist);
@@ -1205,10 +1210,20 @@ bool WorldObject::IsWithinDistInMap(WorldObject const* obj, float dist2compare, 
 
 Position WorldObject::GetHitSpherePointFor(Position const& dest) const
 {
-    G3D::Vector3 vThis(GetPositionX(), GetPositionY(), GetPositionZ() + GetCollisionHeight());
-    G3D::Vector3 vObj(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());
-    G3D::Vector3 contactPoint = vThis + (vObj - vThis).directionOrZero() * std::min(dest.GetExactDist(GetPosition()), GetCombatReach());
+    G3D::Vector3 vThis(GetPositionX(), GetPositionY(), GetPositionZ() + GetCollisionHeight()); // 自己的位置，这里对于自己的位置加上了碰撞高度
+    G3D::Vector3 vObj(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ());          // 目标的位置
 
+    // NOTE:
+    // 设 vObj 和 vThis 为从原点O(0, 0)指向目标点(x, y, z) 的两个向量，则：
+    //  1. vobj - vThis = vC (从 vobj 的头部指向 vThis 的尾部，也可以说指向两个向量的端点)
+    //  2. 求 vC 的单位向量 vC'，如果求值失败(向量vObj与vThis相等)，则返回 0，否则返回 1
+    //  3. 使用单位向量 vC * 距离(std::min([相当于是计算向量 vC 的长度] 和 [玩家可攻击的范围长度])) = vD
+    //  4. 向量 vThis + 向量 vD = vE = contactPoint
+    G3D::Vector3 contactPoint = vThis +
+                                (vObj - vThis).directionOrZero() * std::min(dest.GetExactDist(GetPosition()), GetCombatReach());
+
+    // NOTE:
+    // 计算向量 vE 的绝对角度，使用二元正反切函数来完成，也就是说要返回向量 vE 的朝向角度
     return Position(contactPoint.x, contactPoint.y, contactPoint.z, GetAbsoluteAngle(contactPoint.x, contactPoint.y));
 }
 
@@ -1232,20 +1247,23 @@ bool WorldObject::IsWithinLOS(float ox, float oy, float oz, LineOfSightChecks ch
     return true;
 }
 
-bool WorldObject::IsWithinLOSInMap(WorldObject const* obj, LineOfSightChecks checks, VMAP::ModelIgnoreFlags ignoreFlags) const
+bool WorldObject::IsWithinLOSInMap(WorldObject const* obj, LineOfSightChecks checks /* = LINEOFSIGHT_ALL_CHECKS */, VMAP::ModelIgnoreFlags ignoreFlags /* VMAP::ModelIgnoreFlags::Nothing */) const
 {
     if (!IsInMap(obj))
         return false;
 
     float ox, oy, oz;
+    // NOTE: 如果是玩家则直接获取玩家的 x,y,z 轴坐标，并加上其碰撞高度(因为射线要模拟从眼睛投射出去，而不是脚下)
     if (obj->GetTypeId() == TYPEID_PLAYER)
     {
         obj->GetPosition(ox, oy, oz);
         oz += GetCollisionHeight();
     }
+    // NOTE: 如果不是玩家，则计算这个怪物从玩家视角开始直到怪物身上第一个接触点的位置，使用了一些向量、三角函数相关的一些知识
     else
         obj->GetHitSpherePointFor({ GetPositionX(), GetPositionY(), GetPositionZ() + GetCollisionHeight() }, ox, oy, oz);
 
+    // NOTE: 与上面的计算同理
     float x, y, z;
     if (GetTypeId() == TYPEID_PLAYER)
     {
@@ -1255,6 +1273,7 @@ bool WorldObject::IsWithinLOSInMap(WorldObject const* obj, LineOfSightChecks che
     else
         GetHitSpherePointFor({ obj->GetPositionX(), obj->GetPositionY(), obj->GetPositionZ() + obj->GetCollisionHeight() }, x, y, z);
 
+    // 检测两点之间是否有遮挡
     return GetMap()->isInLineOfSight(x, y, z, ox, oy, oz, GetPhaseMask(), checks, ignoreFlags);
 }
 
@@ -1538,18 +1557,23 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bo
     if (this == obj)
         return true;
 
+    // 检查 object 是否在地图中，且 this 和 objects 在同一个地图同一个区域
     if (obj->IsNeverVisible(implicitDetect) || CanNeverSee(obj))
         return false;
 
+    // 这两个函数没有实现，恒返回 false
     if (obj->IsAlwaysVisibleFor(this) || CanAlwaysSee(obj))
         return true;
 
     bool corpseVisibility = false;
+    // 距离检查 distanceCheck 默认是 false
     if (distanceCheck)
     {
         bool corpseCheck = false;
         if (Player const* thisPlayer = ToPlayer())
         {
+            // 这里检查目标玩家和当前玩家是否都能看见灵魂？
+            // 检查尸体是否对当前玩家还有目标玩家可见，因为玩家死了后尸体和灵魂是可以处于不同位置的
             if (thisPlayer->isDead() && thisPlayer->GetHealth() > 0 && // Cheap way to check for ghost state
                 !(obj->m_serverSideVisibility.GetValue(SERVERSIDE_VISIBILITY_GHOST) & m_serverSideVisibility.GetValue(SERVERSIDE_VISIBILITY_GHOST) & GHOST_VISIBILITY_GHOST))
             {
@@ -1562,6 +1586,7 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool implicitDetect, bo
                 }
             }
 
+            // 应该是交通工具的一些检查
             if (Unit const* target = obj->ToUnit())
             {
                 // Don't allow to detect vehicle accessories if you can't see vehicle
@@ -2804,6 +2829,8 @@ bool WorldObject::IsNeutralToAll() const
 
 SpellCastResult WorldObject::CastSpell(CastSpellTargetArg const& targets, uint32 spellId, CastSpellExtraArgs const& args /*= { }*/)
 {
+    TC_LOG_INFO("ngpong", "WorldObject::CastSpell: {}", boost::stacktrace::to_string(boost::stacktrace::stacktrace()));
+
     SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
     if (!info)
     {
@@ -2833,15 +2860,18 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
     // some positive spells can be casted at hostile target
     bool isPositiveSpell = bySpell && bySpell->IsPositive();
 
+    // 不能攻击自己
     // can't attack self (spells can, attribute check)
     if (!bySpell && this == target)
         return false;
 
+    // 无法攻击不能被攻击的object，可能是NPC之类的
     // can't attack unattackable units
     Unit const* unitTarget = target->ToUnit();
     if (unitTarget && unitTarget->HasUnitState(UNIT_STATE_UNATTACKABLE))
         return false;
 
+    // 无法攻击 GM
     // can't attack GMs
     if (target->GetTypeId() == TYPEID_PLAYER && target->ToPlayer()->IsGameMaster())
         return false;
@@ -2850,9 +2880,12 @@ bool WorldObject::IsValidAttackTarget(WorldObject const* target, SpellInfo const
     // visibility checks (only units)
     if (unit)
     {
+        // 没有使用法术或者是使用了法术但是法术没有允许攻击隐身目标
         // can't attack invisible
         if (!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE))
         {
+            // 检查 caster 是否能够看见 target
+            // bySpell->IsAffectingArea() 检查该函数的效果是否会作用域一个区域
             if (!unit->CanSeeOrDetect(target, bySpell && bySpell->IsAffectingArea()))
                 return false;
         }
@@ -3084,14 +3117,17 @@ Unit* WorldObject::GetMagicHitRedirectTarget(Unit* victim, SpellInfo const* spel
         {
             if (spellInfo->CheckExplicitTarget(this, magnet) == SPELL_CAST_OK && IsValidAttackTarget(magnet, spellInfo))
             {
+                // 如果法术存在速度
                 /// @todo handle this charge drop by proc in cast phase on explicit target
                 if (spellInfo->Speed > 0.0f)
                 {
+                    // 通过计算目标与玩家之间的距离 / 法术的飞行速度(每秒飞行多少m)，然后最终结果乘以 1000 应该是转化为毫秒的逻辑
                     // Set up missile speed based delay
                     uint32 delay = uint32(std::floor(std::max<float>(victim->GetDistance(this), 5.0f) / spellInfo->Speed * 1000.0f));
                     // Schedule charge drop
                     aurEff->GetBase()->DropChargeDelayed(delay, AURA_REMOVE_BY_EXPIRE);
                 }
+                // 如果是立即生效的法术
                 else
                     aurEff->GetBase()->DropCharge(AURA_REMOVE_BY_EXPIRE);
 
@@ -3273,8 +3309,8 @@ void WorldObject::MovePositionToFirstCollision(Position &pos, float dist, float 
 {
     angle += GetOrientation();
     float destx, desty, destz;
-    destx = pos.m_positionX + dist * std::cos(angle);
-    desty = pos.m_positionY + dist * std::sin(angle);
+    destx = pos.m_positionX + dist * std::cos(angle); // cos(angle) = x / r
+    desty = pos.m_positionY + dist * std::sin(angle); // sin(angle) = y / r
     destz = pos.m_positionZ;
 
     // Prevent invalid coordinates here, position is unchanged
@@ -3492,10 +3528,12 @@ struct WorldObjectChangeAccumulator
 
     void BuildPacket(Player* player)
     {
+        // 检查是否重复更新玩家，而且检查目标玩家是否对当前玩家可见
         // Only send update once to a player
         if (plr_list.find(player->GetGUID()) == plr_list.end() && player->HaveAtClient(&i_object))
         {
             i_object.BuildFieldsUpdate(player, i_updateDatas);
+            // 不要重复更新玩家
             plr_list.insert(player->GetGUID());
         }
     }

@@ -140,11 +140,16 @@ void DatabaseWorkerPool<T>::Close()
 template <class T>
 bool DatabaseWorkerPool<T>::PrepareStatements()
 {
+    // 初始化 mysql 的 stmt 相关东西
+
+    // _connections 同步和异步版本的 conntection
     for (auto& connections : _connections)
     {
         for (auto& connection : connections)
         {
             connection->LockIfReady();
+
+            // 完成每种 DataBaseConnection  的 <Name>DatabaseStatements 的初始化
             if (!connection->PrepareStatements())
             {
                 connection->Unlock();
@@ -376,6 +381,9 @@ uint32 DatabaseWorkerPool<T>::OpenConnections(InternalIndex type, uint8 numConne
 {
     for (uint8 i = 0; i < numConnections; ++i)
     {
+        // 创建异步和同步版的 MySqlConnection<T>
+        // 异步的 MySqlConnection 的生产者消费者队列使用 DatabaseWorldPool 中的
+        // 异步的 MySqlConnection 构造函数中会创建 DatabaseWorker 类，并将 _queue 传递进去，Worker 会开启一个线程来处理队列中的sql操作
         // Create the connection
         auto connection = [&] {
             switch (type)
@@ -389,6 +397,9 @@ uint32 DatabaseWorkerPool<T>::OpenConnections(InternalIndex type, uint8 numConne
             }
         }();
 
+        // 通过 MySqlConnection 的 m_connectionInfo 调用 libmysqldev 中的一些初始化信息
+        // 初始化了 MysSqlConnection 中的 m_MySql
+        // m_connectionInfo 在上一步构造函数的时候初始化了
         if (uint32 error = connection->Open())
         {
             // Failed to open a connection or invalid version, abort and cleanup

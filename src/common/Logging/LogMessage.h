@@ -22,6 +22,7 @@
 #include "LogCommon.h"
 #include <string>
 #include <ctime>
+#include <chrono>
 
 struct TC_COMMON_API LogMessage
 {
@@ -33,6 +34,7 @@ struct TC_COMMON_API LogMessage
 
     static std::string getTimeStr(time_t time);
     std::string getTimeStr() const;
+    std::string getTimeStrMs() const;
 
     LogLevel const level;
     std::string const type;
@@ -40,6 +42,7 @@ struct TC_COMMON_API LogMessage
     std::string prefix;
     std::string param1;
     time_t mtime;
+    std::chrono::system_clock::time_point mtimems;
 
     ///@ Returns size of the log message content in bytes
     uint32 Size() const

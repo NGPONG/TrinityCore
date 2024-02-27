@@ -37,7 +37,13 @@ public:
         if (!BaseSocketMgr::StartNetwork(ioContext, bindIp, port, threadCount))
             return false;
 
+        // _acceptor 在 StartNewwork 的时候初始化，用的是 main 线程的 io_context
+        //
+        // 它是父类 SocketMgr 中的成员
+        //
+        // async_acceptr 的 scoket 会调用父类 SocketMgr 中的 OnSocketOpen
         _acceptor->AsyncAcceptWithCallback<&AuthSocketMgr::OnSocketAccept>();
+
         return true;
     }
 

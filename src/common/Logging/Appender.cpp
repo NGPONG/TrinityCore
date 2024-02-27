@@ -59,7 +59,7 @@ void Appender::write(LogMessage* message)
     std::ostringstream ss;
 
     if (flags & APPENDER_FLAGS_PREFIX_TIMESTAMP)
-        ss << message->getTimeStr() << ' ';
+        ss << message->getTimeStrMs() << ' ';
 
     if (flags & APPENDER_FLAGS_PREFIX_LOGLEVEL)
         ss << Trinity::StringFormat("{:<5} ", Appender::getLogLevelString(message->level));

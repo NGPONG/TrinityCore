@@ -64,6 +64,7 @@ public:
         if (_thread)
             return false;
 
+        // 开启一个线程处理
         _thread = new std::thread(&NetworkThread::Run, this);
         return true;
     }
@@ -122,6 +123,7 @@ protected:
     {
         TC_LOG_DEBUG("misc", "Network Thread Starting");
 
+        // 每 1ms 触发一次异步回调
         _updateTimer.expires_from_now(boost::posix_time::milliseconds(1));
         _updateTimer.async_wait([this](boost::system::error_code const&) { Update(); });
         _ioContext.run();
@@ -136,13 +138,17 @@ protected:
         if (_stopped)
             return;
 
+        // 延续异步调用，还是 1ms 逻辑
         _updateTimer.expires_from_now(boost::posix_time::milliseconds(1));
         _updateTimer.async_wait([this](boost::system::error_code const&) { Update(); });
 
+        // 处理新加(accept)进来的连接(放在预备队列_newSockets里面)，并将它们接受进处理队列 _sockets 中
         AddNewSockets();
 
+        // 轮询所有 _sockets，调用其 Update 函数
         _sockets.erase(std::remove_if(_sockets.begin(), _sockets.end(), [this](std::shared_ptr<SocketType> sock)
         {
+            // <name>Session 更新失败，则就将其从处理队列中移除(return true)
             if (!sock->Update())
             {
                 if (sock->IsOpen())
@@ -153,8 +159,10 @@ protected:
                 --this->_connections;
                 return true;
             }
-
-            return false;
+            else
+            {
+                return false;
+            }
         }), _sockets.end());
     }
 

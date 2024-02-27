@@ -127,8 +127,8 @@ bool Position::HasInArc(float arc, Position const* obj, float border) const
     arc = NormalizeOrientation(arc);
 
     // move angle to range -pi ... +pi
-    float angle = GetRelativeAngle(obj);
-    if (angle > float(M_PI))
+    float angle = GetRelativeAngle(obj); // 此处计算出来的 angle 应该表示的是 0 ~ 2pi 的角度
+    if (angle > float(M_PI))             // 调整角度至 -pi ~ +pi 的范围内
         angle -= 2.0f * float(M_PI);
 
     float lborder = -1 * (arc / border);                        // in range -pi..0

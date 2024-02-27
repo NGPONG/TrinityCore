@@ -15,11 +15,12 @@
 # 安装时拷贝配置文件到目录: -DCOPY_CONF=ON
 # 核心是否使用PCH: -DUSE_COREPCH=ON
 # 脚本是否使用PCH: -DUSE_SCRIPTPCH=ON
+# 控制上面两个变量是否不启用: NOPCH=ON
 # 构建类型: -DCMAKE_BUILD_TYPE=Debug
 # 包含更多的调试信息: -DWITH_COREDEBUG=OFF
 # 默认启动动态库: -DWITH_DYNAMIC_LINKING=ON
 # 启用警告: -DWITH_WARNINGS=ON
-# 生成单元测试: BUILD_TESTING
+# 生成单元测试: -DBUILD_TESTING=OFF
 # 编译器选择: -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++
 
 cmake_minimum_required(VERSION 3.11)

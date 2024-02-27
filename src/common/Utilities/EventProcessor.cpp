@@ -39,6 +39,8 @@ EventProcessor::~EventProcessor()
 
 void EventProcessor::Update(uint32 p_time)
 {
+    // TC_LOG_INFO("ngpong", "EventProcessor::Update: {}", boost::stacktrace::to_string(boost::stacktrace::stacktrace()));
+
     // update time
     m_time += p_time;
 

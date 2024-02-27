@@ -339,6 +339,7 @@ void AuctionHouseMgr::LoadAuctionItems()
             continue;
         }
 
+        // 背包为什么要继承 Item？
         Item* item = NewItemOrBag(proto);
         if (!item->LoadFromDB(item_guid, ObjectGuid::Empty, fields, itemEntry))
         {

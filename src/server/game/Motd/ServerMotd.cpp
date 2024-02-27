@@ -31,6 +31,7 @@ namespace
 
 void Motd::SetMotd(std::string motd)
 {
+    // 该段逻辑会遍历 ScriptRegistry<WorldScript> 的 _scripts 成员，但是目前没看到有注册的地方
     // scripts may change motd
     sScriptMgr->OnMotdChange(motd);
 

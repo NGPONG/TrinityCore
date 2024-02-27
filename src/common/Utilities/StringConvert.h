@@ -30,7 +30,8 @@
 
 namespace Trinity::Impl::StringConvertImpl
 {
-    template <typename T, typename = void> struct For
+    template <typename T, typename = void>
+    struct For
     {
         static_assert(Trinity::dependant_false_v<T>, "Unsupported type used for ToString or StringTo");
         /*

@@ -481,6 +481,9 @@ MySQLPreparedStatement* MySQLConnection::GetPreparedStatement(uint32 index)
 
 void MySQLConnection::PrepareStatement(uint32 index, std::string const& sql, ConnectionFlags flags)
 {
+    // 初始化 libmysqldev 中的 stmt 逻辑
+    // 初始化自身的 m_stmts 成员
+
     // Check if specified query should be prepared on this connection
     // i.e. don't prepare async statements on synchronous connections
     // to save memory that will not be used.

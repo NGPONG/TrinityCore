@@ -213,6 +213,15 @@ void WorldSession::SendPacket(WorldPacket const* packet)
     if (!m_Socket)
         return;
 
+    // TEST: 此处可以用于debug发送消息给客户端的内容
+    if (_player and
+        packet->GetOpcode() != SMSG_MONSTER_MOVE and
+        packet->GetOpcode() != SMSG_AURA_UPDATE_ALL and
+        packet->GetOpcode() != SMSG_DESTROY_OBJECT)
+    {
+        TC_LOG_INFO("ngpong", "[{}] send [{}]", this->_accountName, magic_enum::enum_name(static_cast<Opcodes>(packet->GetOpcode())));
+    }
+
 #ifdef TRINITY_DEBUG
     // Code for network use statistic
     static uint64 sendPacketCount = 0;
@@ -300,6 +309,10 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     while (m_Socket && _recvQueue.next(packet, updater))
     {
         OpcodeClient opcode = static_cast<OpcodeClient>(packet->GetOpcode());
+
+        // TEST: 此处可以用于debug接受客户端发送过来的消息内容
+        TC_LOG_INFO("ngpong", "[{}] reveive msg [{}]", this->_accountName, magic_enum::enum_name(static_cast<Opcodes>(packet->GetOpcode())));
+
         ClientOpcodeHandler const* opHandle = opcodeTable[opcode];
         TC_METRIC_DETAILED_TIMER("worldsession_update_opcode_time", TC_METRIC_TAG("opcode", opHandle->Name));
 
@@ -323,6 +336,7 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                     }
                     else if (_player->IsInWorld())
                     {
+                        // 此函数是用于一些预防网络攻击的，比如统计某些包是否达到最大次数等等
                         if(AntiDOS.EvaluateOpcode(*packet, currentTime))
                         {
                             sScriptMgr->OnPacketReceive(this, *packet);

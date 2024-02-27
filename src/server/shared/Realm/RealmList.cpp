@@ -43,7 +43,9 @@ void RealmList::Initialize(Trinity::Asio::IoContext& ioContext, uint32 updateInt
     _updateTimer = std::make_unique<Trinity::Asio::DeadlineTimer>(ioContext);
     _resolver = std::make_unique<Trinity::Asio::Resolver>(ioContext);
 
+    // 查询 build_info 表以初始化 _builds 成员
     LoadBuildInfo();
+
     // Get the content of the realmlist table in the database
     UpdateRealms(boost::system::error_code());
 }
@@ -124,6 +126,7 @@ void RealmList::UpdateRealms(boost::system::error_code const& error)
 
     _realms.clear();
 
+    // 查询 realmlist 表，并使用结果填充 _realms 成员里面的元素
     // Circle through results and add them to the realm map
     if (result)
     {
@@ -195,6 +198,7 @@ void RealmList::UpdateRealms(boost::system::error_code const& error)
     for (auto itr = existingRealms.begin(); itr != existingRealms.end(); ++itr)
         TC_LOG_INFO("server.authserver", "Removed realm \"{}\".", itr->second);
 
+    // 计时器更新 _realms
     if (_updateInterval)
     {
         _updateTimer->expires_from_now(boost::posix_time::seconds(_updateInterval));

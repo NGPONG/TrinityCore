@@ -125,20 +125,28 @@ void TransportMgr::GeneratePath(GameObjectTemplate const* goInfo, TransportTempl
     TaxiPathNodeList const& path = sTaxiPathNodesByPath[pathId];
     std::vector<KeyFrame>& keyFrames = transport->keyFrames;
     Movement::PointsArray splinePath, allPoints;
-    bool mapChange = false;
+
+    // 下面的逻辑和生成路径有关; 路径规划与轨迹跟踪
+
+    // path 由 dbc 读取，都是一些坐标点
     for (size_t i = 0; i < path.size(); ++i)
         allPoints.push_back(G3D::Vector3(path[i]->Loc.X, path[i]->Loc.Y, path[i]->Loc.Z));
 
+    // 这里使用了线性插值法来插入更多的点位
     // Add extra points to allow derivative calculations for all path nodes
     allPoints.insert(allPoints.begin(), allPoints.front().lerp(allPoints[1], -0.2f));
     allPoints.push_back(allPoints.back().lerp(allPoints[allPoints.size() - 2], -0.2f));
     allPoints.push_back(allPoints.back().lerp(allPoints[allPoints.size() - 2], -1.0f));
 
+    // 这里使用了生成器模式
+    //
+    // 默认使用 Catmullrom 样条曲线
     SplineRawInitializer initer(allPoints);
     TransportSpline orientationSpline;
     orientationSpline.init_spline_custom(initer);
     orientationSpline.initLengths();
 
+    bool mapChange = false;
     for (size_t i = 0; i < path.size(); ++i)
     {
         if (!mapChange)

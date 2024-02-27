@@ -332,6 +332,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 
     TC_LOG_DEBUG("network", "WORLD: got cast spell packet, castCount: {}, spellId: {}, castFlags: {}, data length = {}", castCount, spellId, castFlags, (uint32)recvPacket.size());
 
+    // 校验法术ID有效性
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
     {
@@ -340,27 +341,37 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
         return;
     }
 
+    // 忽略被动法术的请求
     if (spellInfo->IsPassive())
     {
         recvPacket.rfinish(); // prevent spam at ignore packet
         return;
     }
 
+    // 处理网络包并构造 SpellCastTargets
+    //  * 可能包含了施法目标位置(施法目标落点，比如一个AOE魔法)，还有源位置(施法者所在位置)；位置信息可能会包含运输工具的信息，比如施法者或目标在马上
+    //  * 可能会包含指定的施法目标
     // client provided targets
     SpellCastTargets targets;
     targets.Read(recvPacket, _player);
+    // 处理网络包中的额外信息，比如：
+    //  1. 法术施法的仰角(高度)和速度，这些在后面计算法术速度、
+    //  2. 可能会包含移动信息，比如一些移动施法、法术中断、或者动态追踪目标时会包含这些信息
     HandleClientCastFlags(recvPacket, castFlags, targets);
 
+    // 检查玩家是否拥有法术，即便没有拥有也可以在特定情况下进行施法
     // not have spell in spellbook
     if (!_player->HasActiveSpell(spellId))
     {
         bool allow = false;
 
+        // 某些法术目标是可解锁的游戏对象
         // allow casting of unknown spells for special lock cases
         if (GameObject* go = targets.GetGOTarget())
             if (go->GetSpellForLock(_player) == spellInfo)
                 allow = true;
 
+        // 玩家身上有特定的触发光环
         // allow casting of spells triggered by clientside periodic trigger auras
         if (_player->HasAuraTypeWithTriggerSpell(SPELL_AURA_PERIODIC_TRIGGER_SPELL_FROM_CLIENT, spellId))
         {
@@ -372,11 +383,13 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
             return;
     }
 
+    // 检查法术是否允许自动施法
     // Client is resending autoshot cast opcode when other spell is cast during shoot rotation
     // Skip it to prevent "interrupt" message
     // Also check targets! target may have changed and we need to interrupt current spell
     if (spellInfo->IsAutoRepeatRangedSpell())
     {
+        // 获取玩家当前正在施展的法术 m_currentSpells 是否是当前法术，是的话则跳过处理
         if (Spell* spell = _player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
         {
             if (spell->m_spellInfo == spellInfo && spell->m_targets.GetUnitTargetGUID() == targets.GetUnitTargetGUID())
@@ -387,6 +400,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
         }
     }
 
+    // 选择合适的法术等级
     // auto-selection buff level base at target level (in spellInfo)
     // TODO: is this even necessary? client already seems to send correct rank for "standard" buffs
     if (spellInfo->IsPositive())
@@ -399,6 +413,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
                 spellInfo = actualSpellInfo;
         }
 
+    // 创建法术实体，并进入法术准备流程
     Spell* spell = new Spell(_player, spellInfo, triggerFlag);
     spell->m_fromClient = true;
     spell->m_cast_count = castCount;                       // set count of casts

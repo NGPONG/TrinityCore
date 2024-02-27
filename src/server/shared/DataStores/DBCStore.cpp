@@ -34,15 +34,24 @@ bool DBCStorageBase::Load(char const* path, char**& indexTable)
     indexTable = nullptr;
 
     DBCFileLoader dbc;
+    // 读取 .dbc 文件的二进制数据，数据存放于 data 与 stringTable 中
+    // data: 是一整个大内存，包含 records(所有行) 的数据 + stringTable 的数据
+    // stringTable: 单独指向 stringTable 那块数据首地址的指针
     // Check if load was sucessful, only then continue
     if (!dbc.Load(path, _fileFormat))
         return false;
 
+    // 字段数量
     _fieldCount = dbc.GetCols();
 
+    // 此函数通过 DBCFileLoader 加载指定 dbc 文件中的 record 数据，加载完的数据可以直接作为二维表使用
+    // 返回的数据为 record(加载后的) 二维表退化为一维表的体现
+    // indexTable 为索引 _dataTable 每一行的数据，每一个元素代表每一行的起始地址
+    // _indexTableSize 为总行数
     // load raw non-string data
     _dataTable = dbc.AutoProduceData(_fileFormat, _indexTableSize, indexTable);
 
+    // 将 stringTable 初始化为 stringBlock
     // load strings from dbc data
     if (char* stringBlock = dbc.AutoProduceStrings(_fileFormat, _dataTable))
         _stringPool.push_back(stringBlock);

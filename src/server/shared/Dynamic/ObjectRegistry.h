@@ -25,6 +25,7 @@
 #include <vector>
 #include <memory>
 
+// T = FactoryHolder<CreatureAI, Creature>
 /** ObjectRegistry holds all registry item of the same type
  */
 template<class T, class Key = std::string>

@@ -127,18 +127,23 @@ extern int main(int argc, char** argv)
     Trinity::Impl::CurrentServerProcessHolder::_type = SERVER_PROCESS_WORLDSERVER;
     signal(SIGABRT, &Trinity::AbortHandler);
 
+    // windows 系统下的一些检查
     Trinity::VerifyOsVersion();
 
+    // 初始化多语言的环境
     Trinity::Locale::Init();
 
+    // 创建配置文件对象
     auto configFile = fs::absolute(_TRINITY_CORE_CONFIG);
-    std::string configService;
 
+    // 处理命令行参数
+    std::string configService;
     auto vm = GetConsoleArguments(argc, argv, configFile, configService);
     // exit if help or version is enabled
     if (vm.count("help") || vm.count("version"))
         return 0;
 
+    // 处理 windows 服务进程的一些逻辑
 #ifdef _WIN32
     if (configService == "install")
         return WinServiceInstall() ? 0 : 1;
@@ -188,21 +193,26 @@ extern int main(int argc, char** argv)
 
     std::string configError;
     if (!sConfigMgr->LoadInitial(configFile.generic_string(),
-                                 std::vector<std::string>(argv, argv + argc),
+                                 std::vector<std::string>(argv, argv + argc), // 起始参数和结束参数
                                  configError))
     {
         printf("Error in config file: %s\n", configError.c_str());
         return 1;
     }
 
+    // 配置可以被环境变量覆盖，具体参考 IniKeyToEnvVarKey 函数
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
+    // 主线程的 io_context
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
 
+    // log system 默认初始化 AppenderConsole 和 AppenderFile，worldserver 追加一个 AppenderDB
     sLog->RegisterAppender<AppenderDB>();
+    // 异步日志支持
     // If logs are supposed to be handled async then we need to pass the IoContext into the Log singleton
     sLog->Initialize(sConfigMgr->GetBoolDefault("Log.Async.Enable", false) ? ioContext.get() : nullptr);
 
+    // 面板内容展示
     Trinity::Banner::Show("worldserver-daemon",
         [](char const* text)
         {
@@ -216,11 +226,14 @@ extern int main(int argc, char** argv)
         }
     );
 
+    // 被覆盖的 config key 为用户提示警告
     for (std::string const& key : overriddenKeys)
         TC_LOG_INFO("server.worldserver", "Configuration field '{}' was overridden with environment variable.", key);
 
+    // 初始化 openssl
     OpenSSLCrypto::threadsSetup(boost::dll::program_location().remove_filename());
 
+    // scope_guard 释放 openssl
     std::shared_ptr<void> opensslHandle(nullptr, [](void*) { OpenSSLCrypto::threadsCleanup(); });
 
     // Seed the OpenSSL's PRNG here.
@@ -228,7 +241,8 @@ extern int main(int argc, char** argv)
     BigNumber seed;
     seed.SetRand(16 * 8);
 
-    /// worldserver PID file creation
+    // 如果配置了 PidFile 则将进程的 PID 写入文件当中
+    // worldserver PID file creation
     std::string pidFile = sConfigMgr->GetStringDefault("PidFile", "");
     if (!pidFile.empty())
     {
@@ -248,25 +262,34 @@ extern int main(int argc, char** argv)
 #endif
     signals.async_wait(SignalHandler);
 
+    // 初始化线程池
     // Start the Boost based thread pool
     int numThreads = sConfigMgr->GetIntDefault("ThreadPool", 1);
     if (numThreads < 1)
         numThreads = 1;
-
     std::shared_ptr<Trinity::ThreadPool> threadPool = std::make_shared<Trinity::ThreadPool>(numThreads);
 
+    // 让 main thread 的 io_context 跑在线程池下
     for (int i = 0; i < numThreads; ++i)
-        threadPool->PostWork([ioContext]() { ioContext->run(); });
+    {
+        threadPool->PostWork([ioContext] ()
+        {
+            ioContext->run();
+        });
+    }
 
     std::shared_ptr<void> ioContextStopHandle(nullptr, [ioContext](void*) { ioContext->stop(); });
 
+    // 设置进程权限
     // Set process priority according to configuration settings
     SetProcessPriority("server.worldserver", sConfigMgr->GetIntDefault(CONFIG_PROCESSOR_AFFINITY, 0), sConfigMgr->GetBoolDefault(CONFIG_HIGH_PRIORITY, false));
 
+    // 开启数据库
     // Start the databases
     if (!StartDB())
         return 1;
 
+    // RAII close db connection
     std::shared_ptr<void> dbHandle(nullptr, [](void*) { StopDB(); });
 
     if (vm.count("update-databases-only"))
@@ -275,9 +298,11 @@ extern int main(int argc, char** argv)
     // Set server offline (not connectable)
     LoginDatabase.DirectPExecute("UPDATE realmlist SET flag = flag | {} WHERE id = '{}'", REALM_FLAG_OFFLINE, realm.Id.Realm);
 
+    // 从数据库加载 Realminfo
     LoadRealmInfo(*ioContext);
 
-    sMetric->Initialize(realm.Name, *ioContext, []()
+    // 初始化一些监控运营指标的东西
+    sMetric->Initialize(realm.Name, *ioContext, [] ()
     {
         TC_METRIC_VALUE("online_players", sWorld->GetPlayerCount());
         TC_METRIC_VALUE("db_queue_login", uint64(LoginDatabase.QueueSize()));
@@ -287,12 +312,23 @@ extern int main(int argc, char** argv)
 
     TC_METRIC_EVENT("events", "Worldserver started", "");
 
+    // RAII close mertric engine
     std::shared_ptr<void> sMetricHandle(nullptr, [](void*)
     {
         TC_METRIC_EVENT("events", "Worldserver shutdown", "");
         sMetric->Unload();
     });
 
+    // AddScripts函数 由 cmake.in 文件生成，在build目录下
+    // 该函数的最终调用出现在 SetInitialWorldSettings 时调用了 ScriptMgr::Initialize
+    //
+    // 在 static 模式下
+    //  * AddScripts 函数内部调用了各模块(src/server/scripts/<directory>)下的 Add<directory>Scripts 函数(在 *_loader.cpp文件下)
+    // 在 shared 模式下:
+    //  * AddScripts 函数内部是空的，各模块(src/server/scripts/<directory>)下的 Add<directory>Scripts 函数(在 *_loader.cpp文件下) 在 HotSwapScriptReloadMgr::InitializeDefaultLibraries 时初始化
+    //
+    // Add<directory>Scripts 函数内部会调用属于当前模块的 scripts 文件的 AddScripts 函数，并在其内部会创建 scripts 的实例
+    // 在实例创建的过程中，其父类会的构造函数最终会调用 AddScript 函数并初始化 SpecializedScriptRegistry 的 _scripts 成员，以便后续遍历使用
     sScriptMgr->SetScriptLoader(AddScripts);
     std::shared_ptr<void> sScriptMgrHandle(nullptr, [](void*)
     {
@@ -300,8 +336,10 @@ extern int main(int argc, char** argv)
         sScriptReloadMgr->Unload();
     });
 
-    // Initialize the World
+    // TOTP加密算法相关的初始化，默认没有设置
     sSecretMgr->Initialize();
+
+    // Initialize the World
     sWorld->SetInitialWorldSettings();
 
     std::shared_ptr<void> mapManagementHandle(nullptr, [](void*)
@@ -314,11 +352,13 @@ extern int main(int argc, char** argv)
         sMapMgr->UnloadAll();                      // unload all grids (including locked in memory)
     });
 
+    // 是否允许 talent 协议
     // Start the Remote Access port (acceptor) if enabled
     std::unique_ptr<AsyncAcceptor> raAcceptor;
     if (sConfigMgr->GetBoolDefault("Ra.Enable", false))
         raAcceptor.reset(StartRaSocketAcceptor(*ioContext));
 
+    // 是否启用 soap 服务
     // Start soap serving thread if enabled
     std::shared_ptr<std::thread> soapThread;
     if (sConfigMgr->GetBoolDefault("SOAP.Enabled", false))
@@ -496,6 +536,7 @@ void WorldUpdateLoop()
         ++World::m_worldLoopCounter;
         realCurrTime = getMSTime();
 
+        // NOTE: 循环频率是 1ms 一次
         uint32 diff = getMSTimeDiff(realPrevTime, realCurrTime);
         if (diff < minUpdateDiff)
         {
@@ -550,6 +591,7 @@ void FreezeDetector::Handler(std::weak_ptr<FreezeDetector> freezeDetectorRef, bo
                 uint32 msTimeDiff = getMSTimeDiff(freezeDetector->_lastChangeMsTime, curtime);
                 if (msTimeDiff > freezeDetector->_maxCoreStuckTimeInMs)
                 {
+                    // TODO: 调式的时候会一直出现 print，临时禁用
                     TC_LOG_ERROR("server.worldserver", "World Thread hangs for {} ms, forcing a crash!", msTimeDiff);
                     ABORT_MSG("World Thread hangs for %u ms, forcing a crash!", msTimeDiff);
                 }
@@ -588,6 +630,8 @@ bool LoadRealmInfo(Trinity::Asio::IoContext& ioContext)
         return false;
 
     Trinity::Asio::Resolver resolver(ioContext);
+
+    // 此处虽然查询了 RealmId，但是不会用它来初始化，而是读配置的，不理解
 
     Field* fields = result->Fetch();
     realm.Name = fields[1].GetString();
@@ -640,9 +684,11 @@ bool StartDB()
         .AddDatabase(CharacterDatabase, "Character")
         .AddDatabase(WorldDatabase, "World");
 
+    // 执行上一步添加的逻辑
     if (!loader.Load())
         return false;
 
+    // 在这里初始化 realm 成员
     ///- Get the realm Id from the configuration file
     realm.Id.Realm = sConfigMgr->GetIntDefault("RealmID", 0);
     if (!realm.Id.Realm)

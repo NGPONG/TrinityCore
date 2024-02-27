@@ -390,8 +390,15 @@ struct DiminishingReturn
 
 enum MeleeHitOutcome : uint8
 {
-    MELEE_HIT_EVADE, MELEE_HIT_MISS, MELEE_HIT_DODGE, MELEE_HIT_BLOCK, MELEE_HIT_PARRY,
-    MELEE_HIT_GLANCING, MELEE_HIT_CRIT, MELEE_HIT_CRUSHING, MELEE_HIT_NORMAL
+    MELEE_HIT_EVADE,    // 目标回避了攻击
+    MELEE_HIT_MISS,     // 击未命中目标
+    MELEE_HIT_DODGE,    // 攻击被闪避
+    MELEE_HIT_BLOCK,    // 攻击被目标格挡
+    MELEE_HIT_PARRY,    // 攻击被目标招架
+    MELEE_HIT_GLANCING, // 擦边击中，这是一种攻击成功命中目标，但因为角度问题或者目标的防御，造成的伤害低于正常攻击
+    MELEE_HIT_CRIT,     // 重击或者暴击
+    MELEE_HIT_CRUSHING, // 压制击
+    MELEE_HIT_NORMAL    // 普通
 };
 
 class DispelInfo
@@ -604,10 +611,10 @@ uint32 createProcHitMask(SpellNonMeleeDamage* damageInfo, SpellMissInfo missCond
 
 enum CurrentSpellTypes : uint8
 {
-    CURRENT_MELEE_SPELL             = 0,
-    CURRENT_GENERIC_SPELL           = 1,
-    CURRENT_CHANNELED_SPELL         = 2,
-    CURRENT_AUTOREPEAT_SPELL        = 3
+    CURRENT_MELEE_SPELL             = 0, // 近战法术，通常是指需要近距离才能施放的攻击或技能
+    CURRENT_GENERIC_SPELL           = 1, // 通用法术，包括大多数普通的施法时间法术
+    CURRENT_CHANNELED_SPELL         = 2, // 引导型法术，施法过程中持续产生效果，直到施法完成或被打断
+    CURRENT_AUTOREPEAT_SPELL        = 3  // 自动重复法术，如猎人的自动射击，持续自动施放直到被取消
 };
 
 #define CURRENT_FIRST_NON_MELEE_SPELL 1
@@ -743,10 +750,10 @@ struct TC_GAME_API CharmInfo
 
 enum ReactiveType
 {
-    REACTIVE_DEFENSE        = 0,
-    REACTIVE_HUNTER_PARRY   = 1,
-    REACTIVE_OVERPOWER      = 2,
-    REACTIVE_WOLVERINE_BITE = 3,
+    REACTIVE_DEFENSE        = 0, // 防御反应，通常在玩家成功防御（如：格挡、招架）时触发
+    REACTIVE_HUNTER_PARRY   = 1, // 猎人的招架反击，特定于猎人职业，在成功招架后可能触发的特殊技能
+    REACTIVE_OVERPOWER      = 2, // 压制反击，通常在敌人躲闪攻击后，战士职业可以使用的特殊攻击
+    REACTIVE_WOLVERINE_BITE = 3, // 狼人咬击，可能是宠物或特定NPC在满足条件后能够执行的特殊攻击
     MAX_REACTIVE
 };
 

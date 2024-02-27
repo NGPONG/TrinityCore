@@ -57,9 +57,11 @@ inline void Cell::Visit(CellCoord const& standing_cell, TypeContainerVisitor<T, 
 template<class T, class CONTAINER>
 inline void Cell::Visit(CellCoord const& standing_cell, TypeContainerVisitor<T, CONTAINER>& visitor, Map& map, float x_off, float y_off, float radius) const
 {
+    // 计算初始单元格是否合法
     if (!standing_cell.IsCoordValid())
         return;
 
+    // 如果 radius 可视范围小于 0，则直接访问当前单元格内的对象
     //no jokes here... Actually placing ASSERT() here was good idea, but
     //we had some problems with DynamicObjects, which pass radius = 0.0f (DB issue?)
     //maybe it is better to just return when radius <= 0.0f?
@@ -68,10 +70,13 @@ inline void Cell::Visit(CellCoord const& standing_cell, TypeContainerVisitor<T, 
         map.Visit(*this, visitor);
         return;
     }
+    // 计算一些边界条件
     //lets limit the upper value for search radius
     if (radius > SIZE_OF_GRIDS)
         radius = SIZE_OF_GRIDS;
 
+    // 依据 Object 所在的坐标(x_off, y_off)并结合可视范围radius计算其所在单元格其周边范围内的单元格形成一个区域，这里使用了
+    // 最大顶点和最小顶点来表示一整个区域
     //lets calculate object coord offsets from cell borders.
     CellArea area = Cell::CalculateCellArea(x_off, y_off, radius);
     //if radius fits inside standing cell
@@ -81,6 +86,11 @@ inline void Cell::Visit(CellCoord const& standing_cell, TypeContainerVisitor<T, 
         return;
     }
 
+    // NOTE: 避免区域过大，比如说计算出了一个大于 5x4 的范围区域，则需要进一步退化，改用访问圆心的方式进行 visit
+    //
+    // 算法的实现中，是先从从两个顶点的 x 轴坐标求 area 水平范围内的中间节点，然后从中间节点开始遍历 Y 轴，并在每次
+    // 遍历完成后都减少Y轴的步伐(减1)，以此遍历完整个水平轴，形成一个近似圆的范围
+    //
     //visit all cells, found in CalculateCellArea()
     //if radius is known to reach cell area more than 4x4 then we should call optimized VisitCircle
     //currently this technique works with MAX_NUMBER_OF_CELLS 16 and higher, with lower values
@@ -91,10 +101,12 @@ inline void Cell::Visit(CellCoord const& standing_cell, TypeContainerVisitor<T, 
         return;
     }
 
+    // 先visit当前的单元格
     //ALWAYS visit standing cell first!!! Since we deal with small radiuses
     //it is very essential to call visitor for standing cell firstly...
     map.Visit(*this, visitor);
 
+    // 然后visit范围内的其它单元格
     // loop the cell range
     for (uint32 x = area.low_bound.x_coord; x <= area.high_bound.x_coord; ++x)
     {

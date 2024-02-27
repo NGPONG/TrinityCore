@@ -66,6 +66,9 @@ void LoadGameObjectModelList(std::string const& dataPath)
     char buff[500];
     while (true)
     {
+        // v1: 最大顶点
+        // v2: 最小顶点
+        // 以此来建立 AABB
         Vector3 v1, v2;
         if (fread(&displayId, sizeof(uint32), 1, model_list_file) != 1)
             if (feof(model_list_file))  // EOF flag is only set after failed reading attempt

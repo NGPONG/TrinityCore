@@ -37,8 +37,10 @@ public:
 
     virtual bool StartNetwork(Trinity::Asio::IoContext& ioContext, std::string const& bindIp, uint16 port, int threadCount)
     {
+        // authserver threadCount = 1
         ASSERT(threadCount > 0);
 
+        // 主线程创建 AsyncAcceptor
         AsyncAcceptor* acceptor = nullptr;
         try
         {
@@ -50,6 +52,7 @@ public:
             return false;
         }
 
+        // acceptor 开始设置监听，直到 main_threads io_context 调用 run 后才开始工作
         if (!acceptor->Bind())
         {
             TC_LOG_ERROR("network", "StartNetwork failed to bind socket acceptor");
@@ -59,13 +62,19 @@ public:
 
         _acceptor = acceptor;
         _threadCount = threadCount;
+        // CreaetThreads 由派生类实现，如 AuthSocketMgr 和 WorldSocketMgr
+        // 返回 N 个 NetworkThread<<Name>Session> 的数组指针
+        // 每一个独立的 NetworkThread 内都有一个独立的 io_context
         _threads = CreateThreads();
 
         ASSERT(_threads);
 
+        // 每一项开启一个线程绑定执行对应的 io_context
         for (int32 i = 0; i < _threadCount; ++i)
             _threads[i].Start();
 
+        // 初始化 AsyncAcceptor 的 _socketFactory 成员
+        // 每一个 NetworkThread 都暴露其 _accept_socket 以提供给建立链接使用
         _acceptor->SetSocketFactory([this]() { return GetSocketForAccept(); });
 
         return true;
@@ -99,9 +108,16 @@ public:
     {
         try
         {
+            // socket -> SocketType
+            // SocketType 继承自 tcp::socket
+            // SocketType 在项目中呈 <name>Session 的类
             std::shared_ptr<SocketType> newSocket = std::make_shared<SocketType>(std::move(sock));
+
+            // start 发起一个异步查询，查询当前连接进来的远端IP是否在 ip_banned 列表当中，如果是的话则给客户端
+            // 返回错误消息，告知禁止登录
             newSocket->Start();
 
+            // 个体 NetworkThread 添加一个建立的 socket 连接让它去处理
             _threads[threadIndex].AddSocket(newSocket);
         }
         catch (boost::system::system_error const& err)
@@ -125,7 +141,10 @@ public:
 
     std::pair<tcp::socket*, uint32> GetSocketForAccept()
     {
+        // 获取 _threads 中连接数最小的一个(负载最小的)，简易版的 load balance
         uint32 threadIndex = SelectThreadWithMinConnections();
+
+        // 获取其用于 accept connection 的 io_context
         return std::make_pair(_threads[threadIndex].GetSocketForAccept(), threadIndex);
     }
 

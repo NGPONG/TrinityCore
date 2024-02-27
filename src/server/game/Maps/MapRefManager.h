@@ -20,6 +20,8 @@
 
 #include "RefManager.h"
 
+class Map;
+class Player;
 class MapReference;
 
 class MapRefManager : public RefManager<Map, Player>

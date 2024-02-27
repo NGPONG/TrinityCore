@@ -28,8 +28,13 @@
 
 void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& packet)
 {
+    // INFO:
+    // 该处理函数是玩家开始进入战斗姿态，但并不意味着直接就开始攻击，只有
+    // 当目标进入自己的攻击范围后则开始攻击
+
     Unit* enemy = ObjectAccessor::GetUnit(*_player, packet.Victim);
 
+    // 检查是否能够获取到敌人object
     if (!enemy)
     {
         // stop attack state at client
@@ -37,6 +42,7 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& pa
         return;
     }
 
+    // 下面的函数主要是做一些可见性的检查，距离的检查，法术效果的检查(如果使用的法术)
     if (!_player->IsValidAttackTarget(enemy))
     {
         // stop attack state at client
@@ -44,6 +50,7 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& pa
         return;
     }
 
+    // 检查玩家是否在载具中且能否攻击，在载具的某些位置是允许攻击的
     //! Client explicitly checks the following before sending CMSG_ATTACK_SWING packet,
     //! so we'll place the same check here. Note that it might be possible to reuse this snippet
     //! in other places as well.
@@ -58,6 +65,7 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& pa
         }
     }
 
+    // 进入攻击状态
     _player->Attack(enemy, true);
 }
 
@@ -68,6 +76,8 @@ void WorldSession::HandleAttackStopOpcode(WorldPackets::Combat::AttackStop& /*pa
 
 void WorldSession::HandleSetSheathedOpcode(WorldPackets::Combat::SetSheathed& packet)
 {
+    // NOTE: 此处是用于设置武器的 `鞘化状态`，依据传入的 packet.CurrentSheathState 来决定武器是出鞘还是收起
+
     if (packet.CurrentSheathState >= MAX_SHEATH_STATE)
     {
         TC_LOG_ERROR("network", "Unknown sheath state {} ??", packet.CurrentSheathState);

@@ -68,4 +68,188 @@ GM命令：
   *
 
 
-* 配置文件被我修改过的字段添加 NGPONG 的注释信息
+配置文件:
+  * 配置文件被我修改过的字段添加 NGPONG 的注释信息
+
+
+疑问:
+  * map grid cell <area> <zone> 之间的关系是什么？
+    * 在计算 area_id 的时候如 VMapManager2::getAreaInfo，会涉及到一些 BIH 算法的计算，看不懂
+  * i_maps 的元素为 Map，似乎存储的是其派生 MapInstance，每个 MapInstance 内部又存储多个 m_InstancedMaps
+  * creature 和 gameobject 内部都有一个 scriptId 字段，是干啥用的？
+  * VisitObjectsToSwapOnMap 有点黑魔法的味道，debug看看咋回事
+
+知识点:
+  * misc:
+    * WorldSession::Update 函数负责接受客户端给服务器发送的数据包，如果需要的话断点可以打在这
+    * WorldObject::GetHitSpherePointFor 该函数内部中的注释解释了一些坐标点与向量之间的关系，还有转换
+    * loop 的频率是 MinWorldUpdateTime
+
+  * AOI:
+    * 每次需要同步数据的时候，都会以玩家当前所在 cell 为中心向外计算一个 area，范围的计算需要以当前玩家的可视范围为准，比如默认可视范围内计算出来的范围为 3x3 的 area
+    * 在area范围合适的情况下(默认)，会遍历这些 area 里面的网格进行 Update
+    * 当area范围太大的情况下，会退化算法，会遍历一个从 area 范围内画出来的一个近似圆范围的area，再对这些 area 进行 Update
+    * 关于这里的逻辑参考：Cell::Visit
+
+  * transport:
+    * 涉及到一些路径规划中的插值计算，样条曲线，等等，在 TransportMgr.cpp 中有一些注释
+    * 每次 map tick 的时候会更新 transport 中的一些东西
+
+  * clock delta
+    * 客户端会在一些逻辑中传递一些时间戳，即便这个时间戳是服务器下发给客户端的，但是当客户端发送给服务器的时候，我们还需要网络丢包的因素产生的差异
+    * WorldSession::SendTimeSync 每 10s 向客户端下发一次时间
+    * WorldSession::HandleTimeSyncResponse 是客户端回复服务器的处理函数，服务器在这里会计算客户端与服务器之间的延迟，然后再通过 WorldSession::ComputeNewClockDelta 函数来统计 TCP 网络丢包产生的时间
+    * 关于 WorldSession::ComputeNewClockDelta 的逻辑参考  https://web.archive.org/web/20180430214420/http://www.mine-control.com/zack/timesync/timesync.html，也可以问问 chatgpt
+
+  * movement
+    * 客户端当输入了一个移动键或者更改朝向指令则向服务器发送消息，服务器处理: WorldSession::HandleMovementOpcodes
+    * 相关协议: CMSG_SET_ACTIVE_MOVER; MSG_MOVE_*
+    * 每当发生一次移动的时候，就会立即将位置数据(x, y, z, orientation) AOI 的形式同步给其它玩家
+    * 玩家移动后会更新网格内玩家的对象可见性，使用 m_clientGUIDs 成员进行维护
+    * 玩家每次移动的时候都会给服务器发送的消息内容如下
+        begin move
+        ...moveing
+        ended move
+      在 moving 的过程中都会附带客户端在执行动作时的时间戳，目的是为了服务器在将该消息广播给附近可视的客户端时，辅助它们进行外插值运算
+      有一点需要额外注意的是，服务器在处理这个时间戳的时候会加上一个 _timeSyncClockDelta(由 WorldSession::HandleTimeSyncResponse 函数运算)，该成员表示的是
+      客户端与服务器同步始终时由于网络抖动或者丢包影响所造成的一些时间差异，加上这个的目的是为了辅助客户端执行外插值运算能够更准确
+    * 关于移动的具体逻辑可以参考这篇文章的介绍：
+      * https://zhuanlan.zhihu.com/p/560861786
+      * https://www.reddit.com/r/gamedev/comments/q6aqlj/multiplayer_game_data_and_interpolation/
+    * 控制移动动作行为
+      * 包括怪物的随机运动、追逐、跟随等
+      * 特定 object(比如 Player、Creature) 的基类中保存了一个 movespline 成员，该成员是控制对象移动的样条
+      * movespline 内部维护了一套状态机，包括初始化、执行中、已结束，默认情况下，比如 Player，都是一个已结束的状态
+      * 在每次 tick 的过程中，如果 movespline 可用，则会依据 spline 里面的控制点中的坐标、权重、时间信息去更新 Object 新的位置；该逻辑在 MoveSpline::_updateState 函数中完成
+      * movespline 生成(初始化)会依据一个最上级基类(MovementGeneratorMedium)的抽象来完成，比如 RandomMovementGenerator
+        * 生成的逻辑在 MotionMaster::Update 函数内，最终会调用至 MoveSplineInit::Launch 函数
+        * 生成的逻辑也是在每次 tick 的过程中，具体来说是更新完 movespline 中的坐标信息后，但是在生成的时候会检测 movespline 的一些状态，比如是否完成，还有检查一些时间，是否能移动的状态等等一些边界条件
+        * RandomMovementGenerator 是一个常用的生成器，针对 Map 上的野怪
+        * RandomMovementGenerator 每次在调用生成的时候，会从 0 ~ 2π(弧度等于360度) 的角度上随机一个值作为角度，然后在以一个距离，一起去计算路径，在计算路径的过程中，涉及到一些碰撞的检测，还有使用地图预所以生成的导航网格去构建 movespline 的具体路径
+          * 为什么不用寻路算法优化这里？因为没必要，因为路径很短，而且本身也有一些导航网格的数据也可以很方便的查询，就不需要了，引入算法还需要更多的空间复杂度
+
+  * script hotswap:
+    * 每个 script 库虽然被编译安装至可执行文件的目录，但是加载的时候是加载的一个 tmp(从源目录拷贝过去) 的热更库
+    * 基于 dlopen/dlclose 动态库动态卸载和加载
+    * 使用 esfw 监控目录的变化
+    * 热更的时机在世界每次 Update 的时候，而且每次热更前会延迟一小会再去卸载加载
+
+  * map_manager
+    * misc:
+      * 默认情况下是一个线程负责所有 map 的 tick，但是我们可以通过配置开启多个线程
+      * tick 的频率为 MapUpdateInterval 配置管理
+    * construct:
+      * 地图是依据 y 轴和 z 轴基于网格的形式来划分的；所以会出现负值的情况
+      * 每张地图为 64 x 64 个 Grid 组成; 参考 Map:i_grids
+      * 一个 Grid 的 size(一条边的长度) 为 533.3333f; 参考 SIZE_OF_GRIDS
+      * 一个 Grid 由 8 x 8 个 Cell 组成; 参考 NGrid::i_cells
+      * 一个 Cell 的 size(一条边的长度) 为 66.6666f; 参考 SIZE_OF_GRID_CELL
+      * 依据 Grid 为基础来计算索引，在代码中以 GridCoord 类来表示
+      * 依据 Cell 为基础来计算索引，在代码中以 CellCoord 类来表示; Trinity::ComputeCellCoord; 该函数能够依据给定的一个世界位置(world postion)来计算其所在的 cell 索引; 里面的逻辑会考虑负值与结果值的边缘情况的计算
+      * 当然也可以依据 Cell 的索引来推断出其所在的 Grid 索引，在代码中以 Cell 类作为转换，参考 Map::AddPlayerToMap 开头处的逻辑
+      * 静态数据与动态数据
+        * 地图中存在静态数据，它们在服务器启动的时候通过配置来读取，并使用 vmap_manager 进行管理，参考 Map::GetAreaInfo 处的逻辑
+        * 地图中的动态数据使用 _dynamicTree 进行管理; 他会随着激活的 cell 而被填充，随着 cell 的卸载而被删除; 它包含了一些模型的数据，比如椅子那些，可能数据源来自静态数据
+        * 每张地图维护一个 _dynamicTree
+        * 每个 _dynamicTree 内部包含了 64 x 64 个 BIH 树，每次对其进行添加或者修改不会重新平衡这棵树，而是放在服务器每次 tick 的时候
+        * _dynamicTree 的重平衡频率为 CHECK_TREE_PERIOD
+    * coordinate
+      * 世界坐标系，即玩家Object身上的 PostionXYZ，其原点在大陆的正中间
+      * 引擎内使用的坐标系，暂时还没搞清楚其坐标轴与世界坐标系之间的关系
+    * collision:
+      * 每个 object(也可以说是模型) 都会依据 AABB 生成一个碰撞包围盒
+      * 每个 GRID 中会构建一个 BIH 结构树，每当有新的 object 被加入或从 Cell 中移除时都会重新构建(balance)(具体来说时机放在每次 tick 上)这颗树，即将包围盒放在合适的位置上
+      * 计算碰撞、高度、还有可视距离都是给予这颗 BIH 结构树去进行的
+    * state_machine:
+      *
+    * 无缝地图实现
+      * 基于网格实现
+      * 每个线程管理一整张地图
+      * 一整个大陆是一张地图，也就是说网格划分的是一整个大陆
+      * 一个线程负责一张地图是不是有点卡？
+      * 动态加载和卸载网格
+      * 由于玩家移动只是修改网格坐标，所以复杂度是很低的
+
+  * 网络
+
+  * 生产者消费者无锁队列
+
+  * AI
+
+  * attack
+    * melee attack
+      * 1. CMSG_ATTACK_SWING(WorldSession::HandleAttackSwingOpcode):
+        * 消息用于进入战斗状态于战前的一些设置，此时并不意味着已经开始攻击，仅只是开始进入战斗状态
+        * 玩家侧: 设置玩家还有其召唤物还有宠物的一些战前状态的属性；比如重置武器攻击计时器；绑定受害者目标以方便后续逻辑的计算
+        * 生物侧: 会开始加入生物的威胁列表；激活生物 AI 的反应，比如呼叫增援；触发战斗音效等等
+        * 此消息最终可能会为客户端转发 SMSG_ATTACK_START 和 SMSG_AI_REACTION 消息
+      * 2. CMSG_SET_SHEATHED(WorldSession::HandleSetSheathedOpcode):
+        * 设置武器的收鞘状态，拔出武器的一些逻辑
+      * 3. 执行攻击
+        * 攻击时机在每次 Player::Update 的时候
+        * 判断玩家是否进入了战斗准备状态，由第一步的消息设置
+        * 判断主副手武器攻击的计时器是否到期，总是优先主手武器出击，副手武器的攻击计时器是主手武器的两倍
+        * 判断受害者目标是否在攻击距离内，使用了向量相关的数学知识，参考 Unit::IsWithinMeleeRangeAt 处的注释
+        * 判断受害者目标是否在合理的攻击范围(角度)内，这里使用的是二元正切函数来计算
+        * 判断受害者目标是否与当前玩家直接存在直线视野(无遮挡)；参考 WorldObject::IsWithinLOSInMap 处的注释
+        * 判断合理通过函数 Unit::AttackerStateUpdate 来完成攻击伤害的主流程，其中包括伤害的计算，扣血等等一系列流程
+        * 发送 SMSG_ATTACKERSTATEUPDATE(Unit::SendAttackStateUpdate)；此消息用于客户端更新造成的伤害效果，比如打了多少血，是否被闪避或者暴击等等
+      * 4. 战斗结束
+        * 战斗结束的标记以发送 SMSG_ATTACK_STOP 消息为准
+    * ranged attack
+      * 1. CMSG_ATTACK_SWING(WorldSession::HandleAttackSwingOpcode):
+        * 消息用于进入战斗状态于战前的一些设置，此时并不意味着已经开始攻击，仅只是开始进入战斗状态
+        * 玩家侧: 设置玩家还有其召唤物还有宠物的一些战前状态的属性；比如重置武器攻击计时器；绑定受害者目标以方便后续逻辑的计算
+        * 生物侧: 会开始加入生物的威胁列表；激活生物 AI 的反应，比如呼叫增援；触发战斗音效等等
+        * 此消息最终可能会为客户端转发 SMSG_ATTACK_START 和 SMSG_AI_REACTION 消息
+    * spell
+      * 1. CMSG_CAST_SPELL(WorldSession::HandleCastSpellOpcode)
+        * 该消息只是玩家正在释放某一种法术，内部会针对网络包的数据做一些检查，比如法术有效性等
+        * 网络包中会包含
+          * 此刻正在施放的法术ID，施法者ID，目标ID(如果是指向性法术的话)
+          * 仰角高度、落点位置(AOE魔法)等等一些需要后面针对特定类型法术执行物理计算的客户端采集量
+          * 网络包中的内容会被初始化至 SpellCastTargets 对象内
+        * 创建 Spell 实体，并使用 SpellCastTargets 进行下一步(prepare)初始化工作
+      * 2. 准备(Spell::prepare)
+        * Spell 的一些检查工作，比如是否被禁用、是否处于移动状态等；prepare函数不一定会在 HandleCastSpellOpcode 被调用，可能由于一些敌方攻击导致触发了玩家身上的光环效果时，也会调用 prepare
+        * 初始化 Spell 各项成员的工作；比如受害目标(如果为指向性施法)、施法消耗时间(准备阶段的读条时间)、消耗道具、消耗能量、光环触发标志(后续使用)等等
+        * 可能会依据玩家等级动态调整一下效果参数，比如法术引用的光环所带来的增益效果
+        * 初始化 Spell 状态机为 SPELL_STATE_PREPARING
+        * 初始化一个SpellEvent
+          * 这是法术执行的核心逻辑成员
+          * 包含了 Spell::update 工作
+          * 包含了延时法术计时与触发的一些工作
+        * 初始化相关 scripts 至 m_loadedScripts 成员
+        * Spell::CheckCast 一系列复杂的检查
+          * 检查施法范围: Spell::CheckRange
+          * 如果指定了施法指定了落点位置，则检查LOS: m_caster->IsWithinLOS
+          * ...
+        * 计算施法消耗时间 m_casttime (有一些施法动作需要读条)，并设置计时器 m_timer
+        * 对于直接触发的法术，则直接调用 Spell::cast 进入法术执行阶段
+        * 对于需要延迟触发的法术(比如需要施法读条时间的)，则向客户端发送 SMSG_SPELL_START 表示进入施法阶段，并等待 SpellEvent 的下一次 tickl; 设置 Spell 状态机为 SPELL_STATE_DELAYED
+    * 3. Spell::update
+      * 在 SpelEvent::Execute 时被调用
+      * 相当于每次 tick 阶段对 Spell 做一些动态性的检查
+      * 计时器 m_timer 过期后会调用 Spell::cast 进入法术执行阶段
+    * 4. SpelEvent::Execute
+      * 在 Unit::Update 时被调用
+      * 连带执行 Spell::update
+      * m_delayMoment 计时器过期后会执行 Spell::handle_delayed，执行法术的最终生效阶段
+    * 5. Spell::cast
+      * 执行一些检查
+      * 调用 m_loadedScripts 的 BeforeCast
+      * 通过 Spell::SelectSpellTargets 来完成目标的确认工作
+        * 不同类型的法术会有不同确认法术目标的逻辑，比如AOE或扇形范围法术等，具体逻辑在 Spell::SelectEffectImplicitTargets
+        * 一些法术会存在弹道，所以会依据法术的速度还有与目标之间的距离确认法术抵达时间(m_delayMoment)(具体在 Spell::AddUnitTarget 时会设置)
+      * 调用 m_loadedScripts 的 OnCast
+      * 更新成就、消耗物品、消耗能量相关的逻辑
+      * 发送 SMSG_SPELL_GO 消息，如果需要的话则会附带法术的一些弹道或投射物的轨迹、速度的一些数据
+      * 如果存在速度和弹道，则触发另一个计时器执行 m_delayMoment，否则立即生效法术效果
+      * 调用 m_loadedScripts 的 AfterCast
+      * 触发一些AI执行的时机
+
+- - * - -
+- * * * -
+* * * * *
+- * * * -
+- - * - -

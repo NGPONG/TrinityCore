@@ -36,6 +36,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "magic_enum.hpp"
 #include <boost/accumulators/statistics/variance.hpp>
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
@@ -272,6 +273,7 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid.ReadAsPacked();
 
+    // 开始前的一些校验
     if (!IsRightUnitBeingMoved(guid))
     {
         recvData.rfinish();                     // prevent warnings spam
@@ -282,6 +284,7 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     Unit* mover = client->GetActivelyMovedUnit();
     Player* plrMover = mover->ToPlayer();
 
+    // 忽略一些情况
     // ignore, waiting processing in WorldSession::HandleMoveWorldportAckOpcode and WorldSession::HandleMoveTeleportAck
     if (plrMover && plrMover->IsBeingTeleported())
     {
@@ -297,12 +300,15 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
 
     recvData.rfinish();                         // prevent warnings spam
 
+    // 校验位置是否合法，不能超出地图边界
     if (!movementInfo.pos.IsPositionValid())
         return;
 
+    // 此处校验玩家如果存在移动样条且样条还未执行完毕的情况下则跳过
     if (!mover->movespline->Finalized())
         return;
 
+    // 处理一些特殊情况，似乎是和交通工具或者传送相关的
     /* handle special cases */
     if (movementInfo.HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
     {
@@ -350,16 +356,21 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
         movementInfo.transport.Reset();
     }
 
+    // 设置一些坠落伤害的东西
     // fall damage generation (ignore in flight case that can be triggered also at lags in moment teleportation to another map).
     if (opcode == MSG_MOVE_FALL_LAND && plrMover && !plrMover->IsInFlight())
         plrMover->HandleFall(movementInfo);
 
+    // 降落伞相关的逻辑
     // interrupt parachutes upon falling or landing in water
     if (opcode == MSG_MOVE_FALL_LAND || opcode == MSG_MOVE_START_SWIM)
         mover->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_LANDING); // Parachutes
 
     /* process position-change */
     WorldPacket data(opcode, recvData.size());
+
+    // 这个时间是客户端在发生位置变化那一刻的时间戳(客户端计算出来的)，这里加上了 _timeSyncClockDelta，表示时间同步差(考虑一些网络丢包的影响)，目的
+    // 主要还是为了辅助客户端执行外插值运算，且让时间戳可以更精准一些
     int64 movementTime = (int64) movementInfo.time + _timeSyncClockDelta;
     if (_timeSyncClockDelta == 0 || movementTime < 0 || movementTime > 0xFFFFFFFF)
     {
@@ -372,11 +383,14 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     }
 
     movementInfo.guid = mover->GetGUID();
+
+    // 发送位置信息给周边的玩家
     WriteMovementInfo(&data, &movementInfo);
     mover->SendMessageToSet(&data, _player);
 
     mover->m_movementInfo = movementInfo;
 
+    // 一些交通工具相关的逻辑
     // Some vehicles allow the passenger to turn by himself
     if (Vehicle* vehicle = mover->GetVehicle())
     {
@@ -394,15 +408,19 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
         return;
     }
 
+    // 更新玩家的位置相关的数据
     mover->UpdatePosition(movementInfo.pos);
 
     if (plrMover)                                            // nothing is charmed, or player charmed
     {
+        // 如果玩家在坐着的状态则更改为站着
         if (plrMover->IsSitState() && (movementInfo.flags & (MOVEMENTFLAG_MASK_MOVING | MOVEMENTFLAG_MASK_TURNING)))
             plrMover->SetStandState(UNIT_STAND_STATE_STAND);
 
+        // 更新坠落数据
         plrMover->UpdateFallInformationIfNeed(movementInfo, opcode);
 
+        // 如果玩家的位置小于网格内的最低高度则杀死玩家相关的逻辑
         if (movementInfo.pos.GetPositionZ() < plrMover->GetMap()->GetMinHeight(movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY()))
         {
             if (!(plrMover->GetBattleground() && plrMover->GetBattleground()->HandlePlayerUnderMap(plrMover)))

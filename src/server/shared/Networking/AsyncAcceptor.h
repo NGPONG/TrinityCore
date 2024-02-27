@@ -46,15 +46,26 @@ public:
     template<AcceptCallback acceptCallback>
     void AsyncAcceptWithCallback()
     {
+        // load blance 取出一个连接数最小的 socket(io_context)
+        // 这里的 socket 使用的是 NetworkThread 中的 io_context
         tcp::socket* socket;
         uint32 threadIndex;
         std::tie(socket, threadIndex) = _socketFactory();
+
+        // NOTE:
+        // 这里获取的 socket 作为 NetworkThread 中的成员，但是下文逻辑会对其进行移动，这样的做法不会有bug吗？
+        // 实际测试下来所有和该 socket 有关的逻辑打印出来的地址都是同一个，上一条结论没错
+        // 而且实际测试下来不会有问题，疑问？
+
+        // 这里的 _acceptor 是 main 线程的 io_context 创建；所以这里还是主线程去执行的
+        // socket 用的是开的子线程创建的 io_context，当接受成功后会把连接放到这个 socket 里面
         _acceptor.async_accept(*socket, [this, socket, threadIndex](boost::system::error_code error)
         {
             if (!error)
             {
                 try
                 {
+                    // 设置 socket 非阻塞
                     socket->non_blocking(true);
 
                     acceptCallback(std::move(*socket), threadIndex);

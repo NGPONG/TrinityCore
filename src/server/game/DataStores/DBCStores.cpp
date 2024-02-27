@@ -228,9 +228,23 @@ static bool LoadDBC_assert_print(uint32 fsize, uint32 rsize, const std::string& 
 }
 
 template<class T>
-inline void LoadDBC(uint32& availableDbcLocales, StoreProblemList& errors, DBCStorage<T>& storage, std::string const& dbcPath, std::string const& filename,
-                    char const* dbTable = nullptr, char const* dbFormat = nullptr, char const* dbIndexName = nullptr)
+inline void LoadDBC(uint32& availableDbcLocales,
+                    StoreProblemList& errors,
+                    DBCStorage<T>& storage,
+                    std::string const& dbcPath,
+                    std::string const& filename,
+                    char const* dbTable = nullptr,
+                    char const* dbFormat = nullptr,
+                    char const* dbIndexName = nullptr)
 {
+    // availableDbcLocales = 0xFFFFFFFF
+    // dbcPath = "dbc/"
+    // dbForamt = "*.dbc"
+
+    // GetFormat 函数返回 DBCStorage<T> 其基类中的 _fileFormat 成员，该成员在 DBCStorage<*> 创建的时候即初始化了
+    // _fileFormat 指示 T 中的成员变量的类型
+
+    // 检查 _fileFormat 于 sizeof(T) 是否对应
     // compatibility format and C++ structure sizes
     ASSERT(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()) == sizeof(T) || LoadDBC_assert_print(DBCFileLoader::GetFormatRecordSize(storage.GetFormat()), sizeof(T), filename));
 
@@ -249,10 +263,12 @@ inline void LoadDBC(uint32& availableDbcLocales, StoreProblemList& errors, DBCSt
             localizedName.push_back('/');
             localizedName.append(filename);
 
+            // 默认支持 enus，但是可以添加多语言支持，分别在 data/dbc/<lanagues>目录下
             if (!storage.LoadStringsFrom(localizedName.c_str()))
                 availableDbcLocales &= ~(1 << i);             // mark as not available for speedup next checks
         }
 
+        // 数据库加载
         if (dbTable)
             storage.LoadFromDB(dbTable, dbFormat, dbIndexName);
     }
@@ -280,6 +296,8 @@ void LoadDBCStores(const std::string& dataPath)
 
     StoreProblemList bad_dbc_files;
     uint32 availableDbcLocales = 0xFFFFFFFF;
+
+    // dbc 文件缓存会在这里被调用 Load
 
 #define LOAD_DBC(store, file) LoadDBC(availableDbcLocales, bad_dbc_files, store, dbcPath, file)
 
@@ -408,6 +426,7 @@ void LoadDBCStores(const std::string& dataPath)
 
 #undef LOAD_DBC_EXT
 
+    // 角色面部发型条目
     for (CharacterFacialHairStylesEntry const* entry : sCharacterFacialHairStylesStore)
         if (entry->RaceID && ((1 << (entry->RaceID - 1)) & RACEMASK_ALL_PLAYABLE) != 0) // ignore nonplayable races
             sCharFacialHairMap.insert({ entry->RaceID | (entry->SexID << 8) | (entry->VariationID << 16), entry });
@@ -416,12 +435,15 @@ void LoadDBCStores(const std::string& dataPath)
         if (entry->RaceID && ((1 << (entry->RaceID - 1)) & RACEMASK_ALL_PLAYABLE) != 0) // ignore nonplayable races
             sCharSectionMap.insert({ entry->BaseSection | (entry->SexID << 8) | (entry->RaceID << 16), entry });
 
+    // 角色初始装备条目？
     for (CharStartOutfitEntry const* outfit : sCharStartOutfitStore)
         sCharStartOutfitMap[outfit->RaceID | (outfit->ClassID << 8) | (outfit->SexID << 16)] = outfit;
 
+    // 表情文本声音条目
     for (EmotesTextSoundEntry const* entry : sEmotesTextSoundStore)
         sEmotesTextSoundMap[EmotesTextSoundKey(entry->EmotesTextID, entry->RaceID, entry->SexID)] = entry;
 
+    // 派别(门派)条目？
     for (FactionEntry const* faction : sFactionStore)
     {
         if (faction->ParentFactionID)
@@ -431,6 +453,7 @@ void LoadDBCStores(const std::string& dataPath)
         }
     }
 
+    // 矫正数据？max不能小于min？
     for (GameObjectDisplayInfoEntry const* info : sGameObjectDisplayInfoStore)
     {
         if (info->GeoBoxMax.X < info->GeoBoxMin.X)

@@ -487,10 +487,17 @@ void World::LoadConfigSettings(bool reload)
         sMetric->LoadFromConfigs();
     }
 
-    ///- Read the player limit and the Message of the day from the config file
+    // 设置单world限制玩家数量
     SetPlayerAmountLimit(sConfigMgr->GetIntDefault("PlayerLimit", 100));
+
+    // 设置登录广播
+    // 该段逻辑会遍历 ScriptRegistry<WorldScript> 的 _scripts 成员，但是目前没看到有注册的地方
+    // 该段逻辑最终会将设置好的 motd string 缓存起来，然后在后面的逻辑中(玩家登录)发送给玩家
     Motd::SetMotd(sConfigMgr->GetStringDefault("Motd", "Welcome to a Trinity Core Server."));
 
+    // 下面的逻辑开始初始化一大堆配置到 World 的成员变量中
+
+    // getBoolConfig 时使用
     ///- Read ticket system setting from the config file
     m_bool_configs[CONFIG_ALLOW_TICKETS] = sConfigMgr->GetBoolDefault("AllowTickets", true);
     m_bool_configs[CONFIG_DELETE_CHARACTER_TICKET_TRACE] = sConfigMgr->GetBoolDefault("DeletedCharacterTicketTrace", false);
@@ -714,6 +721,7 @@ void World::LoadConfigSettings(bool reload)
         TC_LOG_ERROR("server.loading", "GridCleanUpDelay ({}) must be greater {}. Use this minimal value.", m_int_configs[CONFIG_INTERVAL_GRIDCLEAN], MIN_GRID_DELAY);
         m_int_configs[CONFIG_INTERVAL_GRIDCLEAN] = MIN_GRID_DELAY;
     }
+    // 重新加载配置的时候清空地图网格，内容有点多，等逻辑执行到 CreateMap 再看看吧
     if (reload)
         sMapMgr->SetGridCleanUpDelay(m_int_configs[CONFIG_INTERVAL_GRIDCLEAN]);
 
@@ -1553,6 +1561,7 @@ void World::LoadConfigSettings(bool reload)
 /// Initialize the World
 void World::SetInitialWorldSettings()
 {
+    // realmId 会在 StartDB 的过程中初始化一次，不理解为什么这里还要读一次配置
     if (uint32 realmId = sConfigMgr->GetIntDefault("RealmID", 0)) // 0 reserved for auth
         sLog->SetRealmId(realmId);
 
@@ -1562,23 +1571,29 @@ void World::SetInitialWorldSettings()
     ///- Initialize the random number generator
     srand((unsigned int)GameTime::GetGameTime());
 
+    // 自定义 alloc and free
     ///- Initialize detour memory management
     dtAllocSetCustom(dtCustomAlloc, dtCustomFree);
 
     ///- Initialize VMapManager function pointers (to untangle game/collision circular deps)
     VMAP::VMapManager2* vmmgr2 = VMAP::VMapFactory::createOrGetVMapManager();
-    vmmgr2->GetLiquidFlagsPtr = &GetLiquidFlags;
+    // 这两个成员在 VMapManager2 的默认构造函数里面会初始化一个默认的，这里做了一个替换
+    vmmgr2->GetLiquidFlagsPtr = &GetLiquidFlags; // 该函数是 TOOLS 工具下的，而且看代码只有在运行 main 的时候才执行，为什么要用它来初始化这个指针？
     vmmgr2->IsVMAPDisabledForPtr = &DisableMgr::IsVMAPDisabledFor;
 
+    // 加载配置到 World.h 中的一些成员
     ///- Initialize config settings
     LoadConfigSettings();
 
+    // 初始化安全等级，如果此刻有玩家，则会踢掉不符合安全等级的玩家
     ///- Initialize Allowed Security Level
     LoadDBAllowedSecurityLevel();
 
+    // 初始化各个模块的唯一ID为最新的
     ///- Init highest guids before any table loading to prevent using not initialized guids in some code.
     sObjectMgr->SetHighestGuids();
 
+    // 查看所有种族的起始位置所代表的地图文件是否有效
     ///- Check the existence of the map files for all races' startup areas.
     if (!MapManager::ExistMapAndVMap(0, -6240.32f, 331.033f)
         || !MapManager::ExistMapAndVMap(0, -8949.95f, -132.493f)
@@ -1594,14 +1609,17 @@ void World::SetInitialWorldSettings()
         exit(1);
     }
 
+    // 初始化 pool 模块
     ///- Initialize pool manager
     sPoolMgr->Initialize();
 
+    // 初始化 game_event 模块
     ///- Initialize game event manager
     sGameEventMgr->Initialize();
 
     ///- Loading strings. Getting no records means core load has to be canceled because no error message can be output.
 
+    // 加载一些文本对话提示的东西，涉及到多语言的加载
     TC_LOG_INFO("server.loading", "Loading Trinity strings...");
     if (!sObjectMgr->LoadTrinityStrings())
         exit(1);                                            // Error message displayed in function already
@@ -1609,20 +1627,38 @@ void World::SetInitialWorldSettings()
     ///- Update the realm entry in the database with the realm type from the config file
     //No SQL injection as values are treated as integers
 
+    // server_type 对应配置中的 GameType，似乎用于指定 PVP 模式？
     // not send custom type REALM_FFA_PVP to realm list
     uint32 server_type = IsFFAPvPRealm() ? uint32(REALM_TYPE_PVP) : getIntConfig(CONFIG_GAME_TYPE);
+    // 设置 realm 所在区域，目前看逻辑，区域只是影响一些名字校验的逻辑
     uint32 realm_zone = getIntConfig(CONFIG_REALM_ZONE);
 
+    // 每次重启worldserver的时候更新 realmlist 表为我们上面的配置
     LoginDatabase.PExecute("UPDATE realmlist SET icon = {}, timezone = {} WHERE id = '{}'", server_type, realm_zone, realm.Id.Realm);      // One-time query
 
     ///- Load the DBC files
     TC_LOG_INFO("server.loading", "Initialize data stores...");
+    // 初始化 data/dbc/*.dbc 文件到内存作为 record 实体
+    // 玩法逻辑太多了，有需要在适当看看
+    //
+    // NOTE: 这里的 record 的语义其实是 row
     LoadDBCStores(m_dataPath);
+
+    // 检测 DBC 的语言环境
     DetectDBCLang();
 
+    // TODO(wupeng)
+    // 都是些图形学的算法还有逆向的内容，看不懂
+    //
+    // 该函数的逻辑的目的是为了构造 sFlyByCameraStore
+    // 这是一个存储 FlyByCamera 集合的容器
+    //
+    // FlyByCamera 有两个成员，一个是时间戳一个是坐标，意思是在某个时间戳下它的坐标是什么？描绘的是 3D transformations？
+    //
     // Load cinematic cameras
     LoadM2Cameras(m_dataPath);
 
+    // 加载 IP 地理位置信息，如果没配置 IPLocationFile 则可以忽略该逻辑
     // Load IP Location Database
     sIPLocation->Load();
 
@@ -1631,59 +1667,83 @@ void World::SetInitialWorldSettings()
         if (sMapStore.LookupEntry(mapId))
             mapIds.push_back(mapId);
 
+    // 初始化其内部的 iInstanceMapTrees 和 thread_safe_environment 成员
     vmmgr2->InitializeThreadUnsafe(mapIds);
 
+    // 初始化其内部的 loadedMMaps 和 thread_safe_environment 成员
     MMAP::MMapManager* mmmgr = MMAP::MMapFactory::createOrGetMMapManager();
     mmmgr->InitializeThreadUnsafe(mapIds);
 
+    // 初始化 CharacterTables 并对其进行一些校验
     TC_LOG_INFO("server.loading", "Initializing PlayerDump tables...");
     PlayerDump::InitializeTables();
 
+    // 初始化 AI 模块的一些信息
     ///- Initialize static helper structures
     AIRegistry::Initialize();
 
+    // 从 reocrd 中加载法术信息至 SpellMgr::mSpellInfoMap 当中
     TC_LOG_INFO("server.loading", "Loading SpellInfo store...");
     sSpellMgr->LoadSpellInfoStore();
 
+    // 有一些数据可能有问题？对上一步加载的数据进行一些修正
     TC_LOG_INFO("server.loading", "Loading SpellInfo corrections...");
     sSpellMgr->LoadSpellInfoCorrections();
 
+    // 从 record 中加载技能专精信息至 SpellMgr::mSkillLineAbilityMap 当中
     TC_LOG_INFO("server.loading", "Loading SkillLineAbilityMultiMap Data...");
     sSpellMgr->LoadSkillLineAbilityMap();
 
+    // 从数据库 spell_custom_attr 表或者其它途径中初始化 SpellInfo 的 AttributesCu 字段
+    // TODO(wupeng): 逻辑太多了
     TC_LOG_INFO("server.loading", "Loading SpellInfo custom attributes...");
     sSpellMgr->LoadSpellInfoCustomAttributes();
 
+    // 初始化 SpellInfo 的 _diminishInfoTriggered, _diminishInfoNonTriggered 成员
     TC_LOG_INFO("server.loading", "Loading SpellInfo diminishing infos...");
     sSpellMgr->LoadSpellInfoDiminishing();
 
+    // 初始化 SpellEffectInfo 的 _immunityInfo 成员
     TC_LOG_INFO("server.loading", "Loading SpellInfo immunity infos...");
     sSpellMgr->LoadSpellInfoImmunities();
 
+    // 查询 world.player_totem_model 表去初始化 ObjectMgr 的 _playerTotemModel 成员
     TC_LOG_INFO("server.loading", "Loading Player Totem models...");
     sObjectMgr->LoadPlayerTotemModels();
 
+    // 初始化游戏对象的模型列表至 GameObjectModule.cpp:model_list 中
+    // 其中包括模型的一些用于碰撞检测的顶点、模型文件？
     TC_LOG_INFO("server.loading", "Loading GameObject models...");
     LoadGameObjectModelList(m_dataPath);
 
+    // 从 db 中加载 scripts 名字并存储在 _scriptNamesStore
+    // script_name 一般情况下都是指的一些 script 中的类名，除非其构造函数中有特殊说明
     TC_LOG_INFO("server.loading", "Loading Script Names...");
     sObjectMgr->LoadScriptNames();
 
+    // TODO(ngpong): 还不清楚这个是干啥用的，什么是副本模板？
+    // 从 db 中加载数据并初始化 ObjectMgr::_instanceTemplateStore 成员
     TC_LOG_INFO("server.loading", "Loading Instance Template...");
     sObjectMgr->LoadInstanceTemplate();
 
+    // 清理副本的一些历史数据
+    // 主要是做一些副本的过期时间的东西
+    // 初始化了一些成员
     // Must be called before `respawn` data
     TC_LOG_INFO("server.loading", "Loading instances...");
     sInstanceSaveMgr->LoadInstances();
 
+    // 查询 db 中的 characters 表并初始化为 CharacterCache::_characterCacheByNameStore 成语那
     // Load before guilds and arena teams
     TC_LOG_INFO("server.loading", "Loading character cache store...");
     sCharacterCache->LoadCharacterCacheStorage();
 
+    // 通过db查询 broadcast_text 表初始化 ObjectMgr::_broadcastTextStore 成员
     TC_LOG_INFO("server.loading", "Loading Broadcast texts...");
     sObjectMgr->LoadBroadcastTexts();
     sObjectMgr->LoadBroadcastTextLocales();
 
+    // 通过 db 查询初始化一些国际化(应该是多语言处理的)的数据，比如生物，道具等等
     TC_LOG_INFO("server.loading", "Loading Localization strings...");
     uint32 oldMSTime = getMSTime();
     sObjectMgr->LoadCreatureLocales();
@@ -1702,263 +1762,365 @@ void World::SetInitialWorldSettings()
     sObjectMgr->SetDBCLocaleIndex(GetDefaultDbcLocale());        // Get once for all the locale index of DBC language (console/broadcasts)
     TC_LOG_INFO("server.loading", ">> Localization strings loaded in {} ms", GetMSTimeDiffToNow(oldMSTime));
 
+    // 加载一些权限的东西，初始化了 AccountMgr::_permissions 和 AccountMgr::_defaultPermissions 成语那
     TC_LOG_INFO("server.loading", "Loading Account Roles and Permissions...");
     sAccountMgr->LoadRBAC();
 
+    // 初始化 pagetext
     TC_LOG_INFO("server.loading", "Loading Page Texts...");
     sObjectMgr->LoadPageTexts();
 
+    // 从 db 查询 gameobject_template 以初始化 ObjectMgr::_gameObjectTemplateStore 成员
     TC_LOG_INFO("server.loading", "Loading Game Object Templates...");         // must be after LoadPageTexts
     sObjectMgr->LoadGameObjectTemplate();
 
+    // 从 db 查询 gameobject_template_addon 以初始化 ObjectMgr::_gameObjectTemplateAddonStore 成语
     TC_LOG_INFO("server.loading", "Loading Game Object template addons...");
     sObjectMgr->LoadGameObjectTemplateAddons();
 
+    // 从 db 查询 xxx 以初始化 TransportMgr 中的成语那
     TC_LOG_INFO("server.loading", "Loading Transport templates...");
     sTransportMgr->LoadTransportTemplates();
 
+    // 初始化 TransportMgr::_transportAnimations 成员
+    // transport？传送？传输？
+    // 动画需要存在服务器吗？还是只是告诉客户端ID
     TC_LOG_INFO("server.loading", "Loading Transport animations and rotations...");
     sTransportMgr->LoadTransportAnimationAndRotation();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Rank Data...");
     sSpellMgr->LoadSpellRanks();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Required Data...");
     sSpellMgr->LoadSpellRequired();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Group types...");
     sSpellMgr->LoadSpellGroups();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Learn Skills...");
     sSpellMgr->LoadSpellLearnSkills();                           // must be after LoadSpellRanks
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading SpellInfo SpellSpecific and AuraState...");
     sSpellMgr->LoadSpellInfoSpellSpecificAndAuraState();         // must be after LoadSpellRanks
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Learn Spells...");
     sSpellMgr->LoadSpellLearnSpells();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Proc conditions and data...");
     sSpellMgr->LoadSpellProcs();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Bonus Data...");
     sSpellMgr->LoadSpellBonuses();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
+    // Loading Aggro Spells Definitions...
     TC_LOG_INFO("server.loading", "Loading Aggro Spells Definitions...");
     sSpellMgr->LoadSpellThreats();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Spell Group Stack Rules...");
     sSpellMgr->LoadSpellGroupStackRules();
 
+    // 加载一些NPC的流言文本
+    // 为什么不存在客户端？文本传输量挺大的
     TC_LOG_INFO("server.loading", "Loading NPC Texts...");
     sObjectMgr->LoadGossipText();
 
+    // 从 record 或 db 加载法术的一些东西，逻辑有点多
     TC_LOG_INFO("server.loading", "Loading Enchant Spells Proc datas...");
     sSpellMgr->LoadSpellEnchantProcData();
 
+    // 加载物品随机附魔缓存？
     TC_LOG_INFO("server.loading", "Loading Item Random Enchantments Table...");
     LoadRandomEnchantmentsTable();
 
+    // 从 db 查询 disables 以初始化 DisableMgr::m_DisableMap 缓存，暂时不知道是干啥用的
     TC_LOG_INFO("server.loading", "Loading Disables");                         // must be before loading quests and items
     DisableMgr::LoadDisables();
 
+    // 从 db 查询 item_template 以初始化 ObjectMgr::_itemTemplateStore 缓存
     TC_LOG_INFO("server.loading", "Loading Items...");                         // must be after LoadRandomEnchantmentsTable and LoadPageTexts
     sObjectMgr->LoadItemTemplates();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Item set names...");                // must be after LoadItemPrototypes
     sObjectMgr->LoadItemSetNames();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Creature Model Based Info Data...");
     sObjectMgr->LoadCreatureModelInfo();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Creature templates...");
     sObjectMgr->LoadCreatureTemplates();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Equipment templates...");           // must be after LoadCreatureTemplates
     sObjectMgr->LoadEquipmentTemplates();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Creature template addons...");
     sObjectMgr->LoadCreatureTemplateAddons();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Reputation Reward Rates...");
     sObjectMgr->LoadReputationRewardRate();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Creature Reputation OnKill Data...");
     sObjectMgr->LoadReputationOnKill();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Reputation Spillover Data...");
     sObjectMgr->LoadReputationSpilloverTemplate();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
+    // TODO(wupeng): 这个和 AOI 是什么关系？
     TC_LOG_INFO("server.loading", "Loading Points Of Interest Data...");
     sObjectMgr->LoadPointsOfInterest();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Creature Base Stats...");
     sObjectMgr->LoadCreatureClassLevelStats();
 
+    // 从 db 查询以初始化一些缓存变量，由于比较重复就不解释具体字段和查询了
     TC_LOG_INFO("server.loading", "Loading Spawn Group Templates...");
     sObjectMgr->LoadSpawnGroupTemplates();
 
+    // 初始化一些缓存变量
+    // 可能会在这一步更新 creature 的 zoneid && areaid; zoneid && areaid 是啥意思没太看懂
+    // 将生成的生物加入到网格(cell)当中
     TC_LOG_INFO("server.loading", "Loading Creature Data...");
     sObjectMgr->LoadCreatures();
 
+    // 初始化一些缓存变量
+    // 临时召唤物相关，涉及到 creature 或 gameobject
     TC_LOG_INFO("server.loading", "Loading Temporary Summon Data...");
     sObjectMgr->LoadTempSummons();                               // must be after LoadCreatureTemplates() and LoadGameObjectTemplates()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading pet levelup spells...");
     sSpellMgr->LoadPetLevelupSpellMap();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading pet default spells additional to levelup spells...");
     sSpellMgr->LoadPetDefaultSpells();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Addon Data...");
     sObjectMgr->LoadCreatureAddons();                            // must be after LoadCreatureTemplates() and LoadCreatures()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Movement Overrides...");
     sObjectMgr->LoadCreatureMovementOverrides();                 // must be after LoadCreatures()
 
+    // 初始化一些缓存变量
+    // 可能会在这一步更新 gameobject 的 zoneid && areaid; zoneid && areaid 是啥意思没太看懂
+    // 将生成的 gameobject 加入到网格(cell)当中
     TC_LOG_INFO("server.loading", "Loading Gameobject Data...");
     sObjectMgr->LoadGameObjects();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Spawn Group Data...");
     sObjectMgr->LoadSpawnGroups();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading instance spawn groups...");
     sObjectMgr->LoadInstanceSpawnGroups();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GameObject Addon Data...");
     sObjectMgr->LoadGameObjectAddons();                          // must be after LoadGameObjects()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GameObject faction and flags overrides...");
     sObjectMgr->LoadGameObjectOverrides();                       // must be after LoadGameObjects()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GameObject Quest Items...");
     sObjectMgr->LoadGameObjectQuestItems();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Quest Items...");
     sObjectMgr->LoadCreatureQuestItems();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Linked Respawn...");
     sObjectMgr->LoadLinkedRespawn();                             // must be after LoadCreatures(), LoadGameObjects()
 
+    // 初始化一些缓存变量
+    // 这里是更新天气系统的一些缓存，也是使用到了 zone_id，这个相对于 grid cell 来说到底是啥？等看 Player::UpdateZone 的时候再看看逻辑吧
     TC_LOG_INFO("server.loading", "Loading Weather Data...");
     WeatherMgr::LoadWeatherData();
 
+    // 初始化一些缓存变量
+    // 任务系统相关的
     TC_LOG_INFO("server.loading", "Loading Quests...");
     sObjectMgr->LoadQuests();                                    // must be loaded after DBCs, creature_template, item_template, gameobject tables
 
     TC_LOG_INFO("server.loading", "Checking Quest Disables");
     DisableMgr::CheckQuestDisables();                           // must be after loading quests
 
+    // 初始化一些缓存变量
+    // 任务系统兴趣点相关的
     TC_LOG_INFO("server.loading", "Loading Quest POI");
     sObjectMgr->LoadQuestPOI();
 
+    // 初始化一些缓存变量
+    // 任务系统相关的
     TC_LOG_INFO("server.loading", "Loading Quests Starters and Enders...");
     sObjectMgr->LoadQuestStartersAndEnders();                    // must be after quest load
 
+    // 初始化一些缓存变量
+    // 任务系统相关的
     TC_LOG_INFO("server.loading", "Loading Quests Greetings...");
     sObjectMgr->LoadQuestGreetings();                           // must be loaded after creature_template, gameobject_template tables
 
+    // 初始化一些缓存变量
+    // pool manager 是干啥的？
     TC_LOG_INFO("server.loading", "Loading Objects Pooling Data...");
     sPoolMgr->LoadFromDB();
     TC_LOG_INFO("server.loading", "Loading Quest Pooling Data...");
     sQuestPoolMgr->LoadFromDB();                                // must be after quest templates
 
+    // 从 db 中初始化一些 game_event 相关的缓存变量
     TC_LOG_INFO("server.loading", "Loading Game Event Data...");               // must be after loading pools fully
     sGameEventMgr->LoadHolidayDates();                           // Must be after loading DBC
     sGameEventMgr->LoadFromDB();                                 // Must be after loading holiday dates
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading UNIT_NPC_FLAG_SPELLCLICK Data..."); // must be after LoadQuests
     sObjectMgr->LoadNPCSpellClickSpells();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Vehicle Templates...");
     sObjectMgr->LoadVehicleTemplate();                          // must be after LoadCreatureTemplates()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Vehicle Template Accessories...");
     sObjectMgr->LoadVehicleTemplateAccessories();                // must be after LoadCreatureTemplates() and LoadNPCSpellClickSpells()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Vehicle Accessories...");
     sObjectMgr->LoadVehicleAccessories();                       // must be after LoadCreatureTemplates() and LoadNPCSpellClickSpells()
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Vehicle Seat Addon Data...");
     sObjectMgr->LoadVehicleSeatAddon();                         // must be after loading DBC
 
+    // 初始化法术区域的一些东西？又涉及到了3D管理
     TC_LOG_INFO("server.loading", "Loading SpellArea Data...");                // must be after quest load
     sSpellMgr->LoadSpellAreas();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Area Trigger Teleports definitions...");
     sObjectMgr->LoadAreaTriggerTeleports();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Access Requirements...");
     sObjectMgr->LoadAccessRequirements();                        // must be after item template load
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Quest Area Triggers...");
     sObjectMgr->LoadQuestAreaTriggers();                         // must be after LoadQuests
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Tavern Area Triggers...");
     sObjectMgr->LoadTavernAreaTriggers();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading AreaTrigger script names...");
     sObjectMgr->LoadAreaTriggerScripts();
 
+    // 初始化一些缓存变量; LGF = looking for groups，应该是组队相关的
     TC_LOG_INFO("server.loading", "Loading LFG entrance positions..."); // Must be after areatriggers
     sLFGMgr->LoadLFGDungeons();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Dungeon boss data...");
     sObjectMgr->LoadInstanceEncounters();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading LFG rewards...");
     sLFGMgr->LoadRewards();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Graveyard-zone links...");
     sObjectMgr->LoadGraveyardZones();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading spell pet auras...");
     sSpellMgr->LoadSpellPetAuras();
 
+    // 初始化一些缓存变量
+    // 好像是一些传送魔法的
     TC_LOG_INFO("server.loading", "Loading Spell target coordinates...");
     sSpellMgr->LoadSpellTargetPositions();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading enchant custom attributes...");
     sSpellMgr->LoadEnchantCustomAttr();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading linked spells...");
     sSpellMgr->LoadSpellLinked();
 
+    // 初始化一些缓存变量；与初始 player 有关，比如装备出生地点等等
     TC_LOG_INFO("server.loading", "Loading Player Create Data...");
     sObjectMgr->LoadPlayerInfo();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Exploration BaseXP Data...");
     sObjectMgr->LoadExplorationBaseXP();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Pet Name Parts...");
     sObjectMgr->LoadPetNames();
 
+    // 清理废弃数据，默认不开启
     CharacterDatabaseCleaner::CleanDatabase();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading the max pet number...");
     sObjectMgr->LoadPetNumber();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading pet level stats...");
     sObjectMgr->LoadPetLevelInfo();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Player level dependent mail rewards...");
     sObjectMgr->LoadMailLevelRewards();
 
+    // 应该是加载一些战利品掉落物相关的，比如钓鱼，杀怪等
     // Loot tables
     LoadLootTables();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Skill Discovery Table...");
     LoadSkillDiscoveryTable();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Skill Extra Item Table...");
     LoadSkillExtraItemTable();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Skill Perfection Data Table...");
     LoadSkillPerfectItemTable();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Skill Fishing base level requirements...");
     sObjectMgr->LoadFishingBaseSkillLevel();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Achievements...");
     sAchievementMgr->LoadAchievementReferenceList();
     TC_LOG_INFO("server.loading", "Loading Achievement Criteria Lists...");
@@ -1972,137 +2134,179 @@ void World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Completed Achievements...");
     sAchievementMgr->LoadCompletedAchievements();
 
+    // 初始化一些缓存变量; 拍卖行相关的
     ///- Load dynamic data tables from the database
     TC_LOG_INFO("server.loading", "Loading Item Auctions...");
     sAuctionMgr->LoadAuctionItems();
 
+    // 初始化一些缓存变量; 拍卖行相关的
     TC_LOG_INFO("server.loading", "Loading Auctions...");
     sAuctionMgr->LoadAuctions();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Guilds...");
     sGuildMgr->LoadGuilds();
 
+    // 初始化一些缓存变量; 竞技场队伍相关？
     TC_LOG_INFO("server.loading", "Loading ArenaTeams...");
     sArenaTeamMgr->LoadArenaTeams();
 
+    // 初始化一些缓存变量; 组队相关的，同时也初始化 LFG 的一些东西
     TC_LOG_INFO("server.loading", "Loading Groups...");
     sGroupMgr->LoadGroups();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading ReservedNames...");
     sObjectMgr->LoadReservedPlayersNames();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GameObjects for quests...");
     sObjectMgr->LoadGameObjectForQuests();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading BattleMasters...");
     sBattlegroundMgr->LoadBattleMastersEntry();                 // must be after load CreatureTemplate
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GameTeleports...");
     sObjectMgr->LoadGameTele();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Trainers...");       // must be after LoadCreatureTemplates
     sObjectMgr->LoadTrainers();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature default trainers...");
     sObjectMgr->LoadCreatureDefaultTrainers();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Gossip menu...");
     sObjectMgr->LoadGossipMenu();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Gossip menu options...");
     sObjectMgr->LoadGossipMenuItems();                           // must be after LoadTrainers
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Vendors...");
     sObjectMgr->LoadVendors();                                   // must be after load CreatureTemplate and ItemTemplate
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Waypoints...");
     sWaypointMgr->Load();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading SmartAI Waypoints...");
     sSmartWaypointMgr->LoadFromDB();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Formations...");
     sFormationMgr->LoadCreatureFormations();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading World States...");              // must be loaded before battleground, outdoor PvP and conditions
     LoadWorldStates();
 
+    // 初始化一些缓存变量; condtion 模块
     TC_LOG_INFO("server.loading", "Loading Conditions...");
     sConditionMgr->LoadConditions();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change achievement pairs...");
     sObjectMgr->LoadFactionChangeAchievements();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change spell pairs...");
     sObjectMgr->LoadFactionChangeSpells();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change quest pairs...");
     sObjectMgr->LoadFactionChangeQuests();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change item pairs...");
     sObjectMgr->LoadFactionChangeItems();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change reputation pairs...");
     sObjectMgr->LoadFactionChangeReputations();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading faction change title pairs...");
     sObjectMgr->LoadFactionChangeTitles();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GM tickets...");
     sTicketMgr->LoadTickets();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading GM surveys...");
     sTicketMgr->LoadSurveys();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading client addons...");
     AddonMgr::LoadFromDB();
 
+    // 初始化一些缓存变量
     ///- Handle outdated emails (delete/return)
     TC_LOG_INFO("server.loading", "Returning old mails...");
     sObjectMgr->ReturnOrDeleteOldMails(false);
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Autobroadcasts...");
     LoadAutobroadcasts();
 
+    // 初始化一些缓存变量
     ///- Load and initialize scripts
     sObjectMgr->LoadSpellScripts();                              // must be after load Creature/Gameobject(Template/Data)
     sObjectMgr->LoadEventScripts();                              // must be after load Creature/Gameobject(Template/Data)
     sObjectMgr->LoadWaypointScripts();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading spell script names...");
     sObjectMgr->LoadSpellScriptNames();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Texts...");
     sCreatureTextMgr->LoadCreatureTexts();
 
+    // 初始化一些缓存变量
     TC_LOG_INFO("server.loading", "Loading Creature Text Locales...");
     sCreatureTextMgr->LoadCreatureTextLocales();
 
+    // 初始化 scripts 模块
+    // 热更也在这一块，但是没有啥黑魔法
     TC_LOG_INFO("server.loading", "Initializing Scripts...");
     sScriptMgr->Initialize();
     sScriptMgr->OnConfigLoad(false);                                // must be done after the ScriptMgr has been properly initialized
 
+    // 完成对 spell scripts 的初始化(_init, _register)还有一些校验工作
     TC_LOG_INFO("server.loading", "Validating spell scripts...");
     sObjectMgr->ValidateSpellScripts();
 
+    // 从 db 中初始化 SmartAIMgr::mEventMap 成员缓存
     TC_LOG_INFO("server.loading", "Loading SmartAI scripts...");
     sSmartScriptMgr->LoadSmartAIFromDB();
 
+    // 初始化 CalendarMgr 内部的成员缓存
     TC_LOG_INFO("server.loading", "Loading Calendar data...");
     sCalendarMgr->LoadFromDB();
 
+    // 初始化 PetitionMgr 内部的成员缓存
     TC_LOG_INFO("server.loading", "Loading Petitions...");
     sPetitionMgr->LoadPetitions();
-
     TC_LOG_INFO("server.loading", "Loading Signatures...");
     sPetitionMgr->LoadSignatures();
 
+    // 从 db 中初始化成员缓存
     TC_LOG_INFO("server.loading", "Loading Item loot...");
     sLootItemStorage->LoadStorageFromDB();
 
+    // 初始化 ObjectMgr 内部缓存元素中的 QueryData 属性，不知道是做啥用的
     TC_LOG_INFO("server.loading", "Initialize query data...");
     sObjectMgr->InitializeQueriesData(QUERY_DATA_ALL);
 
+    // 加载 COMMAND_MAP 命令表
     TC_LOG_INFO("server.loading", "Initialize commands...");
     Trinity::ChatCommands::LoadCommandMap();
 
@@ -2113,6 +2317,7 @@ void World::SetInitialWorldSettings()
     LoginDatabase.PExecute("INSERT INTO uptime (realmid, starttime, uptime, revision) VALUES({}, {}, 0, '{}')",
                             realm.Id.Realm, uint32(GameTime::GetStartTime()), GitRevision::GetFullVersion());       // One-time query
 
+    // 设置一堆计时器还有其过期时间
     m_timers[WUPDATE_AUCTIONS].SetInterval(MINUTE*IN_MILLISECONDS);
     m_timers[WUPDATE_AUCTIONS_PENDING].SetInterval(250);
     m_timers[WUPDATE_UPTIME].SetInterval(m_int_configs[CONFIG_UPTIME_UPDATE]*MINUTE*IN_MILLISECONDS);
@@ -2148,6 +2353,8 @@ void World::SetInitialWorldSettings()
     mail_timer_expires = ((DAY * IN_MILLISECONDS) / (m_timers[WUPDATE_AUCTIONS].GetInterval()));
     TC_LOG_INFO("server.loading", "Mail timer set to: {}, mail return is called every {} minutes", uint64(mail_timer), uint64(mail_timer_expires));
 
+    // 初始化网格的状态机，每个网格存在不同的状态
+    // 开启 N 个线程去调用 MapUpdater::WorkerThread 函数
     ///- Initialize MapManager
     TC_LOG_INFO("server.loading", "Starting Map System");
     sMapMgr->Initialize();

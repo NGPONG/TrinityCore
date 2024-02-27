@@ -59,6 +59,8 @@ Appender* Log::GetAppenderByName(std::string_view name)
 
 void Log::CreateAppenderFromConfig(std::string const& appenderName)
 {
+    // 依据 Appender.<name> 的 config 初始化 log system
+
     if (appenderName.empty())
         return;
 
@@ -67,11 +69,15 @@ void Log::CreateAppenderFromConfig(std::string const& appenderName)
     // if type = Console. optional1 = Color
     std::string options = sConfigMgr->GetStringDefault(appenderName, "");
 
+    // 将 format 分割为 token
     std::vector<std::string_view> tokens = Trinity::Tokenize(options, ',', true);
 
     size_t const size = tokens.size();
     std::string name = appenderName.substr(9);
 
+    // 检查配置合法性
+
+    // appender_name 长度要大于 2
     if (size < 2)
     {
         fprintf(stderr, "Log::CreateAppenderFromConfig: Wrong configuration for appender %s. Config line: %s\n", name.c_str(), options.c_str());
@@ -82,6 +88,7 @@ void Log::CreateAppenderFromConfig(std::string const& appenderName)
     AppenderType type = AppenderType(Trinity::StringTo<uint8>(tokens[0]).value_or(APPENDER_INVALID));
     LogLevel level = LogLevel(Trinity::StringTo<uint8>(tokens[1]).value_or(LOG_LEVEL_INVALID));
 
+    // 没有注册的 Appender 不允许使用
     auto factoryFunction = appenderFactory.find(type);
     if (factoryFunction == appenderFactory.end())
     {
@@ -89,12 +96,14 @@ void Log::CreateAppenderFromConfig(std::string const& appenderName)
         return;
     }
 
+    // 检查日志等级
     if (level > NUM_ENABLED_LOG_LEVELS)
     {
         fprintf(stderr, "Log::CreateAppenderFromConfig: Wrong Log Level '%s' for appender %s\n", std::string(tokens[1]).c_str(), name.c_str());
         return;
     }
 
+    //
     if (size > 2)
     {
         if (Optional<uint8> flagsVal = Trinity::StringTo<uint8>(tokens[2]))

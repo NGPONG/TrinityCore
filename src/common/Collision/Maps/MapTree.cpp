@@ -154,6 +154,7 @@ namespace VMAP
     //=========================================================
     bool StaticMapTree::isInLineOfSight(Vector3 const& pos1, Vector3 const& pos2, ModelIgnoreFlags ignoreFlag) const
     {
+        // 计算向量 AB 的距离
         float maxDist = (pos2 - pos1).magnitude();
         // return false if distance is over max float, in case of cheater teleporting to the end of the universe
         if (maxDist == std::numeric_limits<float>::max() || !std::isfinite(maxDist))
@@ -164,6 +165,8 @@ namespace VMAP
         // prevent NaN values which can cause BIH intersection to enter infinite loop
         if (maxDist < 1e-10f)
             return true;
+
+        // 发出一条从 A 向量到 AB 向量的射线
         // direction with length of 1
         G3D::Ray ray = G3D::Ray::fromOriginAndDirection(pos1, (pos2 - pos1)/maxDist);
         if (getIntersectionTime(ray, maxDist, true, ignoreFlag))
@@ -180,7 +183,13 @@ namespace VMAP
     bool StaticMapTree::getObjectHitPos(Vector3 const& pPos1, Vector3 const& pPos2, Vector3& pResultHitPos, float pModifyDist) const
     {
         bool result = false;
+
+        // NOTE: 设向量 A = pPos1，向量 B = pPos2，向量 AB = B - A
+
+        // 计算向量 AB 的距离
         float maxDist = (pPos2 - pPos1).magnitude();
+
+        // 校验 AB 的距离在一个合理的范围内
         // valid map coords should *never ever* produce float overflow, but this would produce NaNs too
         ASSERT(maxDist < std::numeric_limits<float>::max());
         // prevent NaN values which can cause BIH intersection to enter infinite loop
@@ -189,11 +198,20 @@ namespace VMAP
             pResultHitPos = pPos2;
             return false;
         }
+
+        // 计算向量 AB 的单位向量 AB'
         Vector3 dir = (pPos2 - pPos1)/maxDist;              // direction with length of 1
+
+        // 使用向量 A 与向量 AB' 初始化射线
         G3D::Ray ray(pPos1, dir);
+
+        // 调用引擎检测碰撞
         float dist = maxDist;
         if (getIntersectionTime(ray, dist, false, ModelIgnoreFlags::Nothing))
         {
+            // 如果发生了碰撞
+
+            // dist 返回发生碰撞的具体距离，使用它 dir 使其 dist 成为一个向量，并让其与向量 A 相加获得向量 C，也可以理解为发生碰撞的向量(坐标点位)
             pResultHitPos = pPos1 + dir * dist;
             if (pModifyDist < 0)
             {
@@ -245,12 +263,16 @@ namespace VMAP
 
         LoadResult result = LoadResult::Success;
 
+        // 第一个文件名为: 000<map_id>.vmtree
         FILE* rf = fopen(fullname.c_str(), "rb");
         if (!rf)
             return LoadResult::FileNotFound;
 
         char tiled;
         char chunk[8];
+        // 校验vmtree文件的魔法数
+        // 校验文件的前8bytes(1chunk) 是否等于VMAP_MAGIC
+        // 校验第9个字节是否不等于0？
         if (!readChunk(rf, chunk, VMAP_MAGIC, 8) || fread(&tiled, sizeof(char), 1, rf) != 1)
         {
             fclose(rf);
@@ -258,12 +280,14 @@ namespace VMAP
         }
         if (tiled)
         {
+            // 第二个文件名为: 000<map_id>_00<tileX>_00<tileY>.vmtile
             std::string tilefile = basePath + getTileFileName(mapID, tileX, tileY);
             FILE* tf = fopen(tilefile.c_str(), "rb");
             if (!tf)
                 result = LoadResult::FileNotFound;
             else
             {
+                // 校验文件的前8bytes(1chunk) 是否等于 VMAP_MAGIC
                 if (!readChunk(tf, chunk, VMAP_MAGIC, 8))
                     result = LoadResult::VersionMismatch;
                 fclose(tf);

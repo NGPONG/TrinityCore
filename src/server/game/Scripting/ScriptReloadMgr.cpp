@@ -280,6 +280,9 @@ Optional<std::shared_ptr<ScriptModule>>
         return {};
     }
 
+    // RAII 释放 dlopen 的文件
+    // 如果发生在获取符号的过程中发生异常则直接释放
+    // 否则将其移动至 ScriptModule 内部，生命周期交由 ScriptModule 管理
     // Use RAII to release the library on failure.
     HandleHolder holder(handle, SharedLibraryUnloader(path, std::move(cache_path)));
 
@@ -296,6 +299,7 @@ Optional<std::shared_ptr<ScriptModule>>
         auto module = new ScriptModule(std::move(holder), getScriptModuleRevisionHash,
             addScripts, getScriptModule, getBuildDirective, path);
 
+        // 延迟释放，为什么？
         // Unload the module at the next update tick as soon as all references are removed
         return std::shared_ptr<ScriptModule>(module, ScheduleDelayedDelete);
     }
@@ -603,8 +607,10 @@ public:
             }
         }
 
+        // /tmp/tc_script_cache_{git_branch}_{sha1}
         temporary_cache_path_ = CalculateTemporaryCachePath();
 
+        // 创建 temporyary_cache_path_ 的目录
         // We use the boost filesystem function versions which accept
         // an error code to prevent it from throwing exceptions.
         boost::system::error_code code;
@@ -621,11 +627,15 @@ public:
         // Used to silent compiler warnings
         (void)code;
 
+        // 如果运行可执行文件时所在的路径和 CMAKE_INSTALL_PREFIX 的不同则会修改 CmakeCache.txt 文件
         // Correct the CMake prefix when needed
         if (sWorld->getBoolConfig(CONFIG_HOTSWAP_PREFIX_CORRECTION_ENABLED))
             DoCMakePrefixCorrectionIfNeeded();
 
+        // 动态加载 so 模块，并调用其内部的 AddScripts 函数
+        // 此处会创建 SourceUpdateListener(每个 Script 模块创建一个独立的)，以监控源文件(代码)的改变
         InitializeDefaultLibraries();
+        // 创建 LibraryUpdateListener，以监控library目录的变化
         InitializeFileWatchers();
     }
 
@@ -713,7 +723,7 @@ private:
     // scripts directory on startup.
     void InitializeDefaultLibraries()
     {
-        fs::path const libraryDirectory(GetLibraryDirectory());
+        fs::path const libraryDirectory(GetLibraryDirectory()); // /home/ngpong/TrinityCore/env/bin/scripts
         fs::directory_iterator const dir_end;
 
         uint32 count = 0;
@@ -857,9 +867,11 @@ private:
         ASSERT(_running_script_module_names.find(path) == _running_script_module_names.end(),
                "Can't load a module which is running already!");
 
+        // ${temporary_cache_path_}/libscripts_<name>.<_unique_library_name_counter>.so
         // Copy the shared library into a cache
         auto cache_path = GenerateUniquePathForLibraryInCache(path);
 
+        // 将 libscripts_<name>.so 拷贝至 ${temporary_cache_path_}/libscripts_<name>.<_unique_library_name_counter>.so
         {
             boost::system::error_code code;
             fs::copy_file(path, cache_path, fs::copy_option::fail_if_exists, code);
@@ -881,6 +893,12 @@ private:
                 path.filename().generic_string(), cache_path.generic_string());
         }
 
+        // 加载 cache_path(拷贝至 path) 的 so 文件内容，并将符号暴露出来创建为 ScriptModule 对象
+        //  * 暴露的符号包括：
+        //      * GetScriptModuleRevisionHash
+        //      * AddScripts
+        //      * GetScriptModule
+        //      * GetBuildDirective
         auto module = ScriptModule::CreateFromPath(path, cache_path);
         if (!module)
         {
@@ -903,6 +921,7 @@ private:
         TC_LOG_INFO("scripts.hotswap", ">> Loaded script module \"{}\" (\"{}\" - {}).",
             path.filename().generic_string(), module_name, module_revision);
 
+        // 校验 script_module 的 hash 数据
         if (module_revision.empty())
         {
             TC_LOG_WARN("scripts.hotswap", ">> Script module \"{}\" has an empty revision hash!",
@@ -924,6 +943,7 @@ private:
         }
 
         {
+            // 重复加载校验
             auto const itr = _running_script_modules.find(module_name);
             if (itr != _running_script_modules.end())
             {
@@ -934,11 +954,13 @@ private:
             }
         }
 
+        // 添加 src/server/scripts/<script_name_dir> 目录下的文件修改 watcher
         // Create the source listener
         auto listener = std::make_unique<SourceUpdateListener>(
             sScriptReloadMgr->GetSourceDirectory() / module_name,
             module_name);
 
+        // 缓存已加载的 module
         // Store the module
         _known_modules_build_directives.insert(std::make_pair(module_name, (*module)->GetBuildDirective()));
         _running_script_modules.insert(std::make_pair(module_name,
@@ -947,6 +969,8 @@ private:
 
         // Process the script loading after the module was registered correctly (#17557).
         sScriptMgr->SetScriptContext(module_name);
+
+        // 开始调用其内部的各种 AddScripts 函数，详见 main.cpp 中的注释
         (*module)->AddScripts();
         TC_LOG_TRACE("scripts.hotswap", ">> Registered all scripts of module {}.", module_name);
 
@@ -967,9 +991,11 @@ private:
         ASSERT(itr != _running_script_module_names.end(),
                "Can't unload a module which isn't running!");
 
+        // 移除所有 registry 内部相符 context(itr->second) 的 scripts
         // Unload the script context
         sScriptMgr->ReleaseScriptContext(itr->second);
 
+        // 一些模块(法术)或object会绑定script，此处是对他们进行重新初始化
         if (finish)
             sScriptMgr->SwapScriptContext();
 
@@ -995,6 +1021,7 @@ private:
                 ref->second.first->GetScriptModule(), ref->second.first.use_count() - 1);
         }
 
+        // 当移除掉 _running_script_modules 成员的同时会调用 ScripotModule 的异构，其析构里面会调用 dlclose
         // Remove the owning reference from the reloader
         _running_script_modules.erase(ref);
         _running_script_module_names.erase(itr);

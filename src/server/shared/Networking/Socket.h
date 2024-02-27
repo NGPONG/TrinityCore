@@ -62,6 +62,7 @@ public:
         if (_isWritingAsync || (_writeQueue.empty() && !_closing))
             return true;
 
+        // 处理 `write` 逻辑，此时需要保证没有异步写操作正在执行
         for (; HandleQueue();)
             ;
 #endif
@@ -105,6 +106,7 @@ public:
     {
         _writeQueue.push(std::move(buffer));
 
+        // 使用 IOCP 始终使用异步写
 #ifdef TC_SOCKET_USE_IOCP
         AsyncProcessQueue();
 #endif
@@ -173,7 +175,9 @@ private:
             return;
         }
 
+        // 改变 buffer 的写指针长度，在 ReadHandler 读取的时候要读取到写指针的位置
         _readBuffer.WriteCompleted(transferredBytes);
+
         ReadHandler();
     }
 

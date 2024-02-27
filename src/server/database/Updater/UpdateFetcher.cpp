@@ -151,6 +151,8 @@ UpdateFetcher::AppliedFileStorage UpdateFetcher::ReceiveAppliedFiles() const
 
 std::string UpdateFetcher::ReadSQLUpdate(boost::filesystem::path const& file) const
 {
+    // 读取sql文件内容
+
     std::ifstream in(file.c_str());
     if (!in.is_open())
     {
@@ -177,7 +179,14 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
                                    bool const archivedRedundancy,
                                    int32 const cleanDeadReferencesMaxCount) const
 {
+    // 查询 updates_include 表，该表的 path 字段指示了一个路径，state 字段只是该路径下所有文件的 state 状态
+    // path 目录下的都是 *.sql 文件
+    // 该函数递归遍历查询这些路径下的所有 *.sql 文件，并将结果返回: <absoulte_path, state>, ...
     LocaleFileStorage const available = GetFileList();
+
+    // 查询 updates 表里面的数据，该表的主键为上面目录的 *.sql 文件名，其余字段对该文件的一些其它信息的补充
+    // 该函数返回 updates 里面的数据实体，返回一个 key 为主键的 map: <name, updates_entry>
+    // 当执行了一条 available 中的 sql 文件则会向这个表里面写入一条数据？
     AppliedFileStorage applied = ReceiveAppliedFiles();
 
     size_t countRecentUpdates = 0;
@@ -190,9 +199,10 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         else
             ++countArchivedUpdates;
 
+    // 构造 applied 一个以 hash 为索引的 map
     // Fill hash to name cache
     HashToFileNameStorage hashToName;
-    for (auto entry : applied)
+    for (auto& entry : std::as_const(applied))
         hashToName.insert(std::make_pair(entry.second.hash, entry.first));
 
     size_t importedUpdates = 0;
@@ -202,8 +212,11 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         TC_LOG_DEBUG("sql.updates", "Checking update \"{}\"...", availableQuery.first.filename().generic_string());
 
         AppliedFileStorage::const_iterator iter = applied.find(availableQuery.first.filename().string());
+
+        // updates 表里面记录了源目录下的 sql 文件
         if (iter != applied.end())
         {
+            // 冗余检测？如果 update 表里面有 *.sql 的一项则跳过
             // If redundancy is disabled, skip it, because the update is already applied.
             if (!redundancyChecks)
             {
@@ -212,6 +225,9 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
                 continue;
             }
 
+            // 如果配置了 Updates.ArchivedRedundancy
+            // 如果 updates 表里面的state字段是 ARCHIVED
+            // 如果 updates_include 里面的 state 字段是 ARCHIVED
             // If the update is in an archived directory and is marked as archived in our database, skip redundancy checks (archived updates never change).
             if (!archivedRedundancy && (iter->second.state == ARCHIVED) && (availableQuery.second == ARCHIVED))
             {
@@ -221,14 +237,18 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
             }
         }
 
+        // 获取 *.sql 文件内容并计算其摘要信息，用来计算 SHA1
         // Calculate a Sha1 hash based on query content.
         std::string const hash = ByteArrayToHexStr(Trinity::Crypto::SHA1::GetDigestOf(ReadSQLUpdate(availableQuery.first)));
 
         UpdateMode mode = MODE_APPLY;
 
+        // updates 表里面没有记录源目录下的 sql 文件
         // Update is not in our applied list
         if (iter == applied.end())
         {
+            // 可能是 *.sql 的文件被重命名了才导致上一条逻辑命中
+            // 使用文件内容的 hash 处理
             // Catch renames (different filename, but same hash)
             HashToFileNameStorage::const_iterator const hashIter = hashToName.find(hash);
             if (hashIter != hashToName.end())
@@ -258,6 +278,7 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
                     continue;
                 }
             }
+            // 文件名没匹配，内容也没匹配，则代表要使用这条sql文件update
             // Apply the update if it was never seen before.
             else
             {
@@ -275,6 +296,7 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         }
         else
         {
+            // sql file 的文件内容有变更
             // If the hash of the files differs from the one stored in our database, reapply the update (because it changed).
             if (iter->second.hash != hash)
             {

@@ -285,14 +285,14 @@ enum Stats
 // EnumUtils: DESCRIBE THIS
 enum Powers : int8
 {
-    POWER_HEALTH                        = -2, // TITLE Health
-    POWER_MANA                          = 0,  // TITLE Mana
-    POWER_RAGE                          = 1,  // TITLE Rage
-    POWER_FOCUS                         = 2,  // TITLE Focus
-    POWER_ENERGY                        = 3,  // TITLE Energy
-    POWER_HAPPINESS                     = 4,  // TITLE Happiness
-    POWER_RUNE                          = 5,  // TITLE Runes
-    POWER_RUNIC_POWER                   = 6,  // TITLE Runic Power
+    POWER_HEALTH                        = -2, // TITLE Health    生命
+    POWER_MANA                          = 0,  // TITLE Mana      魔法
+    POWER_RAGE                          = 1,  // TITLE Rage      怒气值
+    POWER_FOCUS                         = 2,  // TITLE Focus     集中值
+    POWER_ENERGY                        = 3,  // TITLE Energy    能量值
+    POWER_HAPPINESS                     = 4,  // TITLE Happiness 幸福值
+    POWER_RUNE                          = 5,  // TITLE Runes     符文值
+    POWER_RUNIC_POWER                   = 6,  // TITLE Runic Power 符文能量值
     MAX_POWERS                          = 7,  // SKIP
     POWER_ALL                           = 127 // SKIP
 };
@@ -2654,19 +2654,19 @@ enum LockType
 // CreatureType.dbc
 enum CreatureType
 {
-    CREATURE_TYPE_BEAST            = 1,
-    CREATURE_TYPE_DRAGONKIN        = 2,
-    CREATURE_TYPE_DEMON            = 3,
-    CREATURE_TYPE_ELEMENTAL        = 4,
-    CREATURE_TYPE_GIANT            = 5,
-    CREATURE_TYPE_UNDEAD           = 6,
-    CREATURE_TYPE_HUMANOID         = 7,
-    CREATURE_TYPE_CRITTER          = 8,
-    CREATURE_TYPE_MECHANICAL       = 9,
-    CREATURE_TYPE_NOT_SPECIFIED    = 10,
-    CREATURE_TYPE_TOTEM            = 11,
-    CREATURE_TYPE_NON_COMBAT_PET   = 12,
-    CREATURE_TYPE_GAS_CLOUD        = 13
+    CREATURE_TYPE_BEAST            = 1,  // 野兽：包括各种自然界的动物和野生生物。
+    CREATURE_TYPE_DRAGONKIN        = 2,  // 龙类：包括龙和与龙有关的生物。
+    CREATURE_TYPE_DEMON            = 3,  // 恶魔：来自地狱或扭曲虚空的邪恶生物。
+    CREATURE_TYPE_ELEMENTAL        = 4,  // 元素生物：由自然界的基本元素（如火、水、土、风）构成的生物。
+    CREATURE_TYPE_GIANT            = 5,  // 巨人：体型庞大的生物。
+    CREATURE_TYPE_UNDEAD           = 6,  // 不死生物：已死之人的尸体或幽灵。
+    CREATURE_TYPE_HUMANOID         = 7,  // 人型生物：形态类似人类的生物，包括各种族如兽人、精灵等。
+    CREATURE_TYPE_CRITTER          = 8,  // 小动物：通常不会对玩家构成威胁的小型生物，如松鼠、兔子等。
+    CREATURE_TYPE_MECHANICAL       = 9,  // 机械：由人造材料构建的生物，可能由魔法、科技或两者的结合驱动。
+    CREATURE_TYPE_NOT_SPECIFIED    = 10, // 未指定：未被明确分类的生物。
+    CREATURE_TYPE_TOTEM            = 11, // 图腾：由萨满等施法者召唤的，具有特定功能的魔法实体。
+    CREATURE_TYPE_NON_COMBAT_PET   = 12, // 非战斗宠物：伴随玩家但不参与战斗的小动物或生物。
+    CREATURE_TYPE_GAS_CLOUD        = 13  // 气体云：可能为采集资源而存在的，由气体组成的云。
 };
 
 uint32 const CREATURE_TYPEMASK_DEMON_OR_UNDEAD = (1 << (CREATURE_TYPE_DEMON-1)) | (1 << (CREATURE_TYPE_UNDEAD-1));

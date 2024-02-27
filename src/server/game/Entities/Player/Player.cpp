@@ -1008,6 +1008,18 @@ void Player::Update(uint32 p_time)
     if (!IsInWorld())
         return;
 
+    // TEST: 此处用于测试玩家的位置
+    // 下面的代码需要包含头文件 "VMapFactory.h" "VMapManager2.h" <G3D/Vector3.h>
+    //
+    // static long tmp_count = 0;
+    // if (tmp_count += 1; tmp_count % 20 == 0)
+    // {
+    //     TC_LOG_INFO("ngpong", "world_coord: (x = [{}], y = [{}], z = [{}]", this->GetPositionX(), this->GetPositionY(), this->GetPositionZ());
+    //     auto tmp_pos = VMAP::VMapFactory::createOrGetVMapManager()->convertPositionToInternalRep(this->GetPositionX(), this->GetPositionY(), this->GetPositionZ());
+    //     TC_LOG_INFO("ngpong", "engie_coord: (x = [{}], y = [{}], z = [{}]", tmp_pos.x, tmp_pos.y, tmp_pos.z);
+    // }
+
+    // 邮件相关的逻辑
     // undelivered mail
     if (m_nextMailDelivereTime && m_nextMailDelivereTime <= GameTime::GetGameTime())
     {
@@ -1018,6 +1030,7 @@ void Player::Update(uint32 p_time)
         m_nextMailDelivereTime = 0;
     }
 
+    // 似乎是启用电影模式时的一些更新设置？ https://www.reddit.com/r/wow/comments/7hp16t/til_wow_has_an_actioncam_mode_that_is_more/
     // Update cinematic location, if 500ms have passed and we're doing a cinematic now.
     _cinematicMgr->m_cinematicDiff += p_time;
     if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
@@ -1026,6 +1039,7 @@ void Player::Update(uint32 p_time)
         _cinematicMgr->UpdateCinematicLocation(p_time);
     }
 
+    // tick 父类的 update
     //used to implement delayed far teleports
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
@@ -1087,27 +1101,36 @@ void Player::Update(uint32 p_time)
 
     m_achievementMgr->UpdateTimedAchievements(p_time);
 
+    // 处理玩家攻击相关的逻辑；玩家必须处于近战攻击状态，且不是在施法中和冲刺的状态
     if (HasUnitState(UNIT_STATE_MELEE_ATTACKING) && !HasUnitState(UNIT_STATE_CASTING | UNIT_STATE_CHARGING))
     {
+        // 获取受击目标
         if (Unit* victim = GetVictim())
         {
             // default combat reach 10
             /// @todo add weapon, skill check
 
+            // BASE_ATTACK timer 是否到期？
             if (isAttackReady(BASE_ATTACK))
             {
+                // NOTE: 主手武器攻击逻辑
+                // 如果玩家不在攻击距离内
                 if (!IsWithinMeleeRange(victim))
                 {
+                    // 设置 BASE_ATTACK timer 100ms 后重试
                     setAttackTimer(BASE_ATTACK, 100);
                     if (m_swingErrorMsg != 1)               // send single time (client auto repeat)
                     {
+                        // 发送消息
                         SendAttackSwingNotInRange();
                         m_swingErrorMsg = 1;
                     }
                 }
+                // 如果玩家不在其 120度 攻击范围内
                 //120 degrees of radiant range
                 else if (!HasInArc(2 * float(M_PI) / 3, victim))
                 {
+                    // 设置 BASE_ATTACK timer 100ms 后重试
                     setAttackTimer(BASE_ATTACK, 100);
                     if (m_swingErrorMsg != 2)               // send single time (client auto repeat)
                     {
@@ -1115,10 +1138,13 @@ void Player::Update(uint32 p_time)
                         m_swingErrorMsg = 2;
                     }
                 }
+                // 检测成功
                 else
                 {
                     m_swingErrorMsg = 0;                    // reset swing error state
 
+                    // 避免副手武器和主手武器同时发动攻击
+                    // 如果玩家有副手武器，且其过期时间小于 200ms(主手武器是100ms，副手是主手的两倍)，则重置副手武器攻击计时器
                     // prevent base and off attack in same time, delay attack at 0.2 sec
                     if (haveOffhandWeapon())
                         if (getAttackTimer(OFF_ATTACK) < ATTACK_DISPLAY_DELAY)
@@ -1130,6 +1156,7 @@ void Player::Update(uint32 p_time)
                 }
             }
 
+            // 副手攻击；逻辑和上面大致类似
             if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
             {
                 if (!IsWithinMeleeRange(victim))
@@ -1138,6 +1165,7 @@ void Player::Update(uint32 p_time)
                     setAttackTimer(OFF_ATTACK, 100);
                 else
                 {
+                    // 执行副手攻击的同时重置正手攻击的计时器
                     // prevent base and off attack in same time, delay attack at 0.2 sec
                     if (getAttackTimer(BASE_ATTACK) < ATTACK_DISPLAY_DELAY)
                         setAttackTimer(BASE_ATTACK, ATTACK_DISPLAY_DELAY);
@@ -9478,6 +9506,8 @@ void Player::SetVirtualItemSlot(uint8 i, Item* item)
         uint32 charges = item->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
         if (charges == 0)
             return;
+
+        // 应该是设置或者是应用强化效果的
         if (charges > 1)
             item->SetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT, charges-1);
         else
@@ -9498,8 +9528,8 @@ void Player::SetSheath(SheathState sheathed)
             SetVirtualItemSlot(2, nullptr);
             break;
         case SHEATH_STATE_MELEE:                            // prepared melee weapon
-            SetVirtualItemSlot(0, GetWeaponForAttack(BASE_ATTACK, true));
-            SetVirtualItemSlot(1, GetWeaponForAttack(OFF_ATTACK, true));
+            SetVirtualItemSlot(0, GetWeaponForAttack(BASE_ATTACK, true)); // 主手武器
+            SetVirtualItemSlot(1, GetWeaponForAttack(OFF_ATTACK, true));  // 副手武器
             SetVirtualItemSlot(2, nullptr);
             break;
         case SHEATH_STATE_RANGED:                           // prepared ranged weapon
@@ -22457,6 +22487,7 @@ void Player::UpdateVisibilityOf(WorldObject* target)
     {
         if (!CanSeeOrDetect(target, false, true))
         {
+            // 宠物移除相关的
             if (target->GetTypeId() == TYPEID_UNIT)
                 BeforeVisibilityDestroy<Creature>(target->ToCreature(), this);
 

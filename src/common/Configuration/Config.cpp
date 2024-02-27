@@ -143,10 +143,12 @@ bool ConfigMgr::LoadInitial(std::string file, std::vector<std::string> args,
     _filename = std::move(file);
     _args = std::move(args);
 
+    // 配置文件为 ini 格式，通过 property_tree 来解析
     bpt::ptree fullTree;
     if (!LoadFile(_filename, fullTree, error))
         return false;
 
+    // 配置文件的组织形式只有一层，即顶层
     // Since we're using only one section per config file, we skip the section and have direct property access
     _config = fullTree.begin()->second;
 

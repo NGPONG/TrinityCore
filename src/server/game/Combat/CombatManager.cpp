@@ -88,6 +88,8 @@ void CombatReference::EndCombat()
 
 void CombatReference::Refresh()
 {
+    // NOTE: 第一和第二是什么意思？
+
     bool needFirstAI = false, needSecondAI = false;
     if (_suppressFirst)
     {
@@ -187,6 +189,9 @@ Unit* CombatManager::GetAnyTarget() const
 
 bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
 {
+    // TODO: 这个引用对应着什么样的处理逻辑呢？
+
+    // 处理已经建立引用的情况
     // Are we already in combat? If yes, refresh pvp combat
     if (PvPCombatReference* existingPvpRef = Trinity::Containers::MapGetValuePtr(_pvpRefs, who->GetGUID()))
     {
@@ -200,10 +205,12 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
         return true;
     }
 
+    // 检查是否允许开战的有效性
     // Otherwise, check validity...
     if (!CombatManager::CanBeginCombat(_owner, who))
         return false;
 
+    // 创建新的引用，PVP 或者 PVE
     // ...then create new reference
     CombatReference* ref;
     if (_owner->IsControlledByPlayer() && who->IsControlledByPlayer())
@@ -211,9 +218,11 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     else
         ref = new CombatReference(_owner, who);
 
+    // 默认情况下是 false
     if (addSecondUnitSuppressed)
         ref->Suppress(who);
 
+    // 关联刚刚创建的引用至 _pvpRefs 和 _pveRefs；建立双方的！
     // ...and insert it into both managers
     PutReference(who->GetGUID(), ref);
     who->GetCombatManager().PutReference(_owner->GetGUID(), ref);
@@ -222,11 +231,14 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     bool const needSelfAI  = UpdateOwnerCombatState();
     bool const needOtherAI = who->GetCombatManager().UpdateOwnerCombatState();
 
+    // 处理应该是通知 AI 模块开始处理逻辑
     // then, we finally notify the AI (if necessary) and let it safely do whatever it feels like
     if (needSelfAI)
         NotifyAICombat(_owner, who);
     if (needOtherAI)
         NotifyAICombat(who, _owner);
+
+    // 检查引用的创建状态，还是 _pvpRefs 和 _pveRefs
     return IsInCombatWith(who);
 }
 

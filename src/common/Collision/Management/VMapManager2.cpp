@@ -169,8 +169,10 @@ namespace VMAP
         InstanceTreeMap::const_iterator instanceTree = GetMapTree(mapId);
         if (instanceTree != iInstanceMapTrees.end())
         {
+            // 将世界坐标转换为引擎使用的坐标
             Vector3 pos1 = convertPositionToInternalRep(x1, y1, z1);
             Vector3 pos2 = convertPositionToInternalRep(x2, y2, z2);
+
             if (pos1 != pos2)
             {
                 return instanceTree->second->isInLineOfSight(pos1, pos2, ignoreFlags);

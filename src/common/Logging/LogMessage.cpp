@@ -20,12 +20,12 @@
 #include "Util.h"
 
 LogMessage::LogMessage(LogLevel _level, std::string_view _type, std::string _text)
-    : level(_level), type(_type), text(std::move(_text)), mtime(time(nullptr))
+    : level(_level), type(_type), text(std::move(_text)), mtime(time(nullptr)), mtimems(std::chrono::system_clock::now())
 {
 }
 
 LogMessage::LogMessage(LogLevel _level, std::string_view _type, std::string _text, std::string _param1)
-    : level(_level), type(_type), text(std::move(_text)), param1(std::move(_param1)), mtime(time(nullptr))
+    : level(_level), type(_type), text(std::move(_text)), param1(std::move(_param1)), mtime(time(nullptr)), mtimems(std::chrono::system_clock::now())
 {
 }
 
@@ -39,4 +39,22 @@ std::string LogMessage::getTimeStr(time_t time)
 std::string LogMessage::getTimeStr() const
 {
     return getTimeStr(mtime);
+}
+
+std::string LogMessage::getTimeStrMs() const
+{
+    // NOTE: 改用毫秒级时间
+    char buffer[80];
+
+    auto transformed = mtimems.time_since_epoch().count() / 1000000;
+
+    auto millis = transformed % 1000;
+
+    std::time_t tt;
+    tt = std::chrono::system_clock::system_clock::to_time_t (mtimems);
+    auto timeinfo = localtime (&tt);
+    strftime (buffer,80,"%F %H:%M:%S",timeinfo);
+    sprintf(buffer, "%s:%03d",buffer,(int)millis);
+
+    return std::string(buffer);
 }

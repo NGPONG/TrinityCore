@@ -438,6 +438,8 @@ bool SpellCastTargets::HasDst() const
 
 void SpellCastTargets::Update(WorldObject* caster)
 {
+    // 此处是为了保证 m_targets 中的目标信息是最新的，比如位置(可能有)(看起来只是判断了存在运输工具的情况)，施法物品(可能有)
+
     m_objectTarget = (m_objectTargetGUID == caster->GetGUID()) ? caster : ObjectAccessor::GetWorldObject(*caster, m_objectTargetGUID);
 
     m_itemTarget = nullptr;
@@ -500,9 +502,10 @@ class TC_GAME_API SpellEvent : public BasicEvent
 };
 
 Spell::Spell(WorldObject* caster, SpellInfo const* info, TriggerCastFlags triggerFlags, ObjectGuid originalCasterGUID) :
-m_spellInfo(sSpellMgr->GetSpellForDifficultyFromSpell(info, caster)),
-m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerOrOwner()) ? caster->GetCharmerOrOwner() : caster)
-, m_spellValue(new SpellValue(m_spellInfo)), _spellEvent(nullptr)
+    m_spellInfo(sSpellMgr->GetSpellForDifficultyFromSpell(info, caster)),
+    m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerOrOwner()) ? caster->GetCharmerOrOwner() : caster),
+    m_spellValue(new SpellValue(m_spellInfo)),
+    _spellEvent(nullptr)
 {
     m_customError = SPELL_CUSTOM_ERROR_NONE;
     m_fromClient = false;
@@ -598,6 +601,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
     CleanupTargetList();
     memset(m_effectExecuteData, 0, MAX_SPELL_EFFECTS * sizeof(ByteBuffer*));
 
+    // 这里应该是使用 m_caster 初始化一个默认的目的地
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         m_destTargets[i] = SpellDestination(*m_caster);
 }
@@ -637,17 +641,23 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
     // this also makes sure that we correctly send explicit targets to client (removes redundant data)
     uint32 neededTargets = m_spellInfo->GetExplicitTargetMask();
 
+    // 检查目标类型是否与法术所需的目标类型匹配，不匹配的目标将被移除
     if (WorldObject* target = m_targets.GetObjectTarget())
     {
         // check if object target is valid with needed target flags
         // for unit case allow corpse target mask because player with not released corpse is a unit target
-        if ((target->ToUnit() && !(neededTargets & (TARGET_FLAG_UNIT_MASK | TARGET_FLAG_CORPSE_MASK)))
-            || (target->ToGameObject() && !(neededTargets & TARGET_FLAG_GAMEOBJECT_MASK))
-            || (target->ToCorpse() && !(neededTargets & TARGET_FLAG_CORPSE_MASK)))
+        if ((target->ToUnit() && !(neededTargets & (TARGET_FLAG_UNIT_MASK | TARGET_FLAG_CORPSE_MASK))) ||
+            (target->ToGameObject() && !(neededTargets & TARGET_FLAG_GAMEOBJECT_MASK)) ||
+            (target->ToCorpse() && !(neededTargets & TARGET_FLAG_CORPSE_MASK)))
+        {
             m_targets.RemoveObjectTarget();
+        }
     }
+    // 初始化 m_targets 的 m_objectTarget 成员
     else
     {
+        // 尝试根据法术需要的目标类型来选择一个合适的目标；可能是玩家、生物等等
+
         // try to select correct unit target if not provided by client or by serverside cast
         if (neededTargets & (TARGET_FLAG_UNIT_MASK))
         {
@@ -672,12 +682,15 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
         }
     }
 
+    // 纠正目标位置的一些成员
+    // 如果法术指定了需要有目标位置，但是实际传入的网络包 m_targets 不包含，则矫正
     // check if spell needs dst target
     if (neededTargets & TARGET_FLAG_DEST_LOCATION)
     {
         // and target isn't set
         if (!m_targets.HasDst())
         {
+            // 此处会获取目标 target 具体的方位(x,y,z)
             // try to use unit target if provided
             if (WorldObject* target = targets.GetObjectTarget())
                 m_targets.SetDst(*target);
@@ -689,6 +702,7 @@ void Spell::InitExplicitTargets(SpellCastTargets const& targets)
     else
         m_targets.RemoveDst();
 
+    // 逻辑同上
     if (neededTargets & TARGET_FLAG_SOURCE_LOCATION)
     {
         if (!targets.HasSrc())
@@ -729,6 +743,8 @@ void Spell::SelectExplicitTargets()
 
 void Spell::SelectSpellTargets()
 {
+    // 某些施法可能会重定向原始的目标到其它目标身上，但是要检查受害者身上有没有一些特殊光环(比如法术磁铁)，还有法术是否允许重定向
+    // 此处会修改 m_targets 成员
     // select targets for cast phase
     SelectExplicitTargets();
 
@@ -747,6 +763,7 @@ void Spell::SelectSpellTargets()
         if (implicitTargetMask & (TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_GAMEOBJECT_ITEM))
             m_targets.SetTargetFlag(TARGET_FLAG_GAMEOBJECT);
 
+        // 此处用于搜索主要目标(TargetA)和次要目标(TargetB)所关联的Objects，这里涉及到多种搜集方式，比如区域搜索
         SelectEffectImplicitTargets(spellEffectInfo, spellEffectInfo.TargetA, processedAreaEffectsMask);
         SelectEffectImplicitTargets(spellEffectInfo, spellEffectInfo.TargetB, processedAreaEffectsMask);
 
@@ -845,6 +862,7 @@ void Spell::SelectEffectImplicitTargets(SpellEffectInfo const& spellEffectInfo, 
     // some spells appear to need this, however this requires more research
     switch (targetType.GetSelectionCategory())
     {
+        // 选择附近目标、锥形范围内目标或某个区域内目标的情况
         case TARGET_SELECT_CATEGORY_NEARBY:
         case TARGET_SELECT_CATEGORY_CONE:
         case TARGET_SELECT_CATEGORY_AREA:
@@ -875,15 +893,19 @@ void Spell::SelectEffectImplicitTargets(SpellEffectInfo const& spellEffectInfo, 
 
     switch (targetType.GetSelectionCategory())
     {
+        // 负责为持续施法（通道施法）的法术选择目标，仅只是简单的选择 m_originalCaster 绑定的目标
         case TARGET_SELECT_CATEGORY_CHANNEL:
             SelectImplicitChannelTargets(spellEffectInfo, targetType);
             break;
+        // 负责自动选择附近目标，查找施法目的地所在的和附近的 Cell，并遍历里面的 Object，寻找符合 range 范围内的 objects
         case TARGET_SELECT_CATEGORY_NEARBY:
             SelectImplicitNearbyTargets(spellEffectInfo, targetType, effectMask);
             break;
+        // 负责扇形范围法术的目标选择，依据法术配置的圆心角度还有半径，寻找 caster 所在的 cell，并遍历 cell 内的所有 object，如果 object 的角度(Position::HasInArc)还有位置符合，则设置目标
         case TARGET_SELECT_CATEGORY_CONE:
             SelectImplicitConeTargets(spellEffectInfo, targetType, effectMask);
             break;
+        // 负责AOE法术的目标选择，逻辑类似上面的，只是少了角度的计算，只是计算一个范围
         case TARGET_SELECT_CATEGORY_AREA:
             SelectImplicitAreaTargets(spellEffectInfo, targetType, effectMask);
             break;
@@ -951,6 +973,28 @@ void Spell::SelectEffectImplicitTargets(SpellEffectInfo const& spellEffectInfo, 
 
 void Spell::SelectImplicitChannelTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType)
 {
+    // ### 函数目的
+    // 该函数负责为持续施法（通道施法）的法术选择目标。这些目标可能是预先定义的，也可能是根据当前游戏状态动态决定的。
+    //
+    // ### 参数解释
+    // - `SpellEffectInfo const& spellEffectInfo`：这个参数提供了当前正在处理的法术效果的详细信息。它可能包含了影响目标选择逻辑的数据，如效果类型、作用范围等。
+    // - `SpellImplicitTargetInfo const& targetType`：这个参数定义了目标的类型和选择逻辑。它告诉函数应该如何选择目标，例如是选择施法者自身、特定的单位、位置等。
+    //
+    // ### 函数逻辑
+    // 1. **检查目标引用类型**：首先，函数检查`targetType`的引用类型是否为施法者自身。如果不是，函数会中断并打印错误消息，因为当前实现只处理施法者为目标的情况。
+    // 2. **获取当前通道的法术**：函数尝试获取施法者当前正在通道的法术实例。如果没有找到，说明没有正在进行的通道法术，函数将返回并可能记录一条调试信息。
+    // 3. **根据目标类型选择目标**：函数通过`targetType.GetTarget()`检查目标类型，并根据类型执行不同的逻辑：
+    //    - `TARGET_UNIT_CHANNEL_TARGET`：尝试获取施法者正在通道的目标单位，并将其作为法术的目标。
+    //    - `TARGET_DEST_CHANNEL_TARGET`：如果通道法术指定了一个位置作为目标，函数则设置这个位置为当前法术的目标。
+    //    - `TARGET_DEST_CHANNEL_CASTER`：如果目标类型是施法者当前的位置，则直接将施法者的位置设置为法术目标。
+    //
+    // ### 特殊处理
+    // - **脚本钩子调用**：在选择单位或位置作为目标后，函数可能会调用相关的脚本钩子（如果存在），允许自定义逻辑进一步修改或验证目标。
+    // - **日志记录**：在无法找到合适的目标时，函数会记录调试信息，帮助开发者诊断问题。
+    //
+    // ### 结论
+    // `SelectImplicitChannelTargets`函数是游戏法术系统中的一个关键部分，它处理持续施法法术的目标选择逻辑。通过分析目标类型和当前游戏状态，函数确保法术效果能够正确应用于预期的目标上。
+
     if (targetType.GetReferenceType() != TARGET_REFERENCE_TYPE_CASTER)
     {
         ABORT_MSG("Spell::SelectImplicitChannelTargets: received not implemented target reference type");
@@ -1007,6 +1051,36 @@ void Spell::SelectImplicitChannelTargets(SpellEffectInfo const& spellEffectInfo,
 
 void Spell::SelectImplicitNearbyTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType, uint32 effMask)
 {
+    // `SelectImplicitNearbyTargets`函数是游戏编程中一个用于自动选择法术目标的复杂逻辑部分，特别是在与玩家施法相关的环境中。这个函数的设计是为了处理游戏中法术效果的隐式目标选择，尤其是那些需要自动选择附近目标的法术。下面是对这个函数的详细解释：
+    //
+    // ### 函数目的
+    // - 为特定的法术效果自动选择附近的目标，目标的选择基于多种标准，包括与施法者的关系（敌对、友好）、距离、以及是否符合特定的条件。
+    //
+    // ### 参数解释
+    // - `SpellEffectInfo const& spellEffectInfo`：包含了法术效果的详细信息，如法术ID、效果类型等。
+    // - `SpellImplicitTargetInfo const& targetType`：定义了目标的隐含选择逻辑，包括目标类型和选择标准。
+    // - `uint32 effMask`：一个掩码，指定哪些效果是被激活的，以便为这些效果选择目标。
+    //
+    // ### 函数逻辑
+    // 1. **检查目标引用类型**：首先验证目标引用类型是否为施法者（CASTER），如果不是，则中断执行。
+    // 2. **计算选择范围**：根据目标类型（敌对、友好等）和法术信息，计算出选择目标的范围。
+    // 3. **条件列表**：获取与法术效果关联的条件列表，用于进一步筛选目标。
+    // 4. **处理特殊情况**：如果目标类型为特定条目（ENTRY）且没有提供条件，会尝试使用默认目标。
+    // 5. **搜索附近目标**：在指定范围内搜索满足条件的目标。
+    // 6. **处理目标选择结果**：如果找到合适的目标，则根据目标类型（单位、游戏对象、尸体等）和目标选择逻辑对目标进行处理。
+    //
+    // ### 特殊情况处理
+    // - 如果在搜索附近目标时没有找到合适的目标，会记录一条调试信息并发送施法失败的结果。
+    // - 对于不同的目标类型，会有不同的处理逻辑，例如为单位添加目标、为游戏对象添加目标等。
+    // - 在添加目标后，会根据目标类型和法术效果的需要调用相应的脚本钩子，这允许自定义逻辑进行干预。
+    //
+    // ### 关键点
+    // - 这个函数体现了游戏编程中处理法术逻辑的复杂性，需要考虑多种情况和规则。
+    // - 通过使用条件列表和脚本钩子，提供了高度的可配置性和扩展性，允许开发者为特定的法术效果定制目标选择逻辑。
+    // - 函数中的错误处理和调试信息记录机制对于开发和维护过程中的问题定位至关重要。
+    //
+    // 这种类型的函数在游戏开发中是常见的，特别是在需要复杂交互和高度可配置性的MMORPG游戏中。通过详细的参数和精细的逻辑处理，开发者能够实现复杂且响应玩家行为的游戏机制。
+
     if (targetType.GetReferenceType() != TARGET_REFERENCE_TYPE_CASTER)
     {
         ABORT_MSG("Spell::SelectImplicitNearbyTargets: received not implemented target reference type");
@@ -1147,6 +1221,35 @@ void Spell::SelectImplicitNearbyTargets(SpellEffectInfo const& spellEffectInfo, 
 
 void Spell::SelectImplicitConeTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType, uint32 effMask)
 {
+    // `SelectImplicitConeTargets`函数是在游戏中用于选择位于施法者前方锥形区域内的目标的。这个函数通常用于那些影响一个区域内多个目标的法术或技能，比如在角色前方扇形区域内施放的攻击或治疗法术。下面是对这个函数的详细解释：
+    //
+    // ### 函数参数
+    // - `SpellEffectInfo const& spellEffectInfo`：包含法术效果的详细信息，例如效果的半径、条件等。
+    // - `SpellImplicitTargetInfo const& targetType`：描述隐式目标信息，比如目标应该是盟友还是敌人，选择标准的性质等。
+    // - `uint32 effMask`：一个表示正在应用的法术效果的位掩码。这允许函数选择性地对区域内的目标应用效果。
+    //
+    // ### 函数逻辑
+    // 1. **初始检查**：函数首先检查目标引用类型是否正确（`TARGET_REFERENCE_TYPE_CASTER`），确保法术是由有效实体施放的。如果不是，则使用错误消息中断过程。
+    //
+    // 2. **创建目标列表**：创建一个用于保存潜在目标的列表（`std::list<WorldObject*> targets`）。
+    //
+    // 3. **确定半径和锥形角度**：根据法术信息计算效果的半径，并可能进行调整。锥形角度设置为半圆（`π/2`弧度或90度），表示标准的锥形。
+    //
+    // 4. **搜索目标**：
+    //    - **类型掩码计算**：基于对象类型（例如，单位、游戏对象）和条件，计算类型掩码。
+    //    - **目标检查**：使用`Trinity::WorldObjectSpellConeTargetCheck`搜索器，识别锥形区域内匹配由`selectionType`和`condList`设置的标准的所有目标。
+    //    - **搜索后过滤**：可能根据脚本钩子（`CallScriptObjectAreaTargetSelectHandlers`）或法术特定的限制（例如，受影响的最大目标数量）对潜在目标列表进行过滤或修改。
+    //
+    // 5. **对目标应用效果**：对于找到的每个有效目标，应用法术效果（由`effMask`确定）。这可能意味着将一个单位添加到目标列表、对游戏对象应用效果，或根据法术的预期效果影响一个尸体。
+    //
+    // ### 关键概念
+    // - **隐式目标选择**：方法使用法术和其效果定义的标准，而不是玩家或施法者的显式目标选择。
+    // - **锥形目标选择**：这种方法对于影响施法者前方特定区域内多个目标的法术或技能很有用，这在许多游戏中对于区域效果（AoE）或定向法术很常见。
+    // - **脚本钩子集成**：函数包括调用脚本定义的钩子（`CallScriptObjectAreaTargetSelectHandlers`），允许自定义游戏逻辑或对目标选择过程进行修改。
+    // - **效率与灵活性**：通过结合预定义的条件、脚本钩子和动态计算，这种方法为处理游戏环境中各种目标选择场景提供了一种强大的方式。
+    //
+    // 这个方法是游戏的法术施放系统的一个关键组成部分，提供了基于复杂标准集确定锥形区域内哪些目标受到影响的必要逻辑。
+
     if (targetType.GetReferenceType() != TARGET_REFERENCE_TYPE_CASTER)
     {
         ABORT_MSG("Spell::SelectImplicitConeTargets: received not implemented target reference type");
@@ -1199,6 +1302,36 @@ void Spell::SelectImplicitConeTargets(SpellEffectInfo const& spellEffectInfo, Sp
 
 void Spell::SelectImplicitAreaTargets(SpellEffectInfo const& spellEffectInfo, SpellImplicitTargetInfo const& targetType, uint32 effMask)
 {
+    // `SelectImplicitAreaTargets`函数是用来为游戏中的法术选择一个区域内的目标。这个函数对于那些影响特定区域内所有目标的法术或技能，如群体伤害或治疗法术，尤为关键。下面是对这个函数的详细解释：
+    //
+    // ### 函数参数
+    // - `SpellEffectInfo const& spellEffectInfo`：提供关于法术效果的详细信息，例如影响的半径、条件等。
+    // - `SpellImplicitTargetInfo const& targetType`：描述法术目标的隐式信息，比如目标的类型和选择标准。
+    // - `uint32 effMask`：一个位掩码，表示哪些法术效果将被应用。
+    //
+    // ### 函数逻辑
+    // 1. **确定参照物**：首先，根据`targetType`的引用类型，确定法术的参照点或起始点。这可能是施法者自己、一个特定的目标，或者是之前选择的目标。
+    //
+    // 2. **定位中心点**：接着，根据参照物的类型确定法术影响区域的中心点。这个中心点可以是施法者、目标位置，或者是法术指定的源点或目的地点。
+    //
+    // 3. **目标选择**：
+    //    - 计算法术效果的半径，并根据需要进行调整。
+    //    - 使用`SearchAreaTargets`函数根据中心点和半径搜索区域内的目标。这个搜索考虑了目标的类型（如单位或游戏对象），选择标准（如友方或敌方），以及任何特定的条件限制。
+    //
+    // 4. **脚本钩子调用**：`CallScriptObjectAreaTargetSelectHandlers`允许通过脚本对选择的目标进行进一步的自定义处理。
+    //
+    // 5. **处理找到的目标**：
+    //    - 如果设置了影响目标的最大数量，根据需要调整目标列表。
+    //    - 遍历目标列表，为每个目标应用法术效果。这可能包括对单位施加效果、对游戏对象进行操作，或者对尸体进行特定处理。
+    //
+    // ### 关键点
+    // - **灵活的目标参照**：函数能够根据不同的参照类型（如施法者、特定目标或最后一个目标）确定法术的起始点或中心点。
+    // - **动态区域选择**：根据法术的具体需求动态计算影响区域的半径，允许对各种场景进行灵活适应。
+    // - **目标筛选与限制**：通过预设条件和动态调整，确保只有符合特定标准的目标被选中，并允许通过最大目标数量等参数对结果进行限制。
+    // - **脚本扩展性**：通过脚本钩子，为游戏开发者提供了额外的灵活性，使他们能够根据特定的游戏逻辑修改或扩展目标选择过程。
+    //
+    // 这个方法为处理游戏中各种区域效果提供了一种高效且灵活的方式，使得开发者可以根据法术的具体需求和特性，选择适当的目标。
+
     WorldObject* referer = nullptr;
     switch (targetType.GetReferenceType())
     {
@@ -1248,14 +1381,17 @@ void Spell::SelectImplicitAreaTargets(SpellEffectInfo const& spellEffectInfo, Sp
              ABORT_MSG("Spell::SelectImplicitAreaTargets: received not implemented target reference type");
              return;
     }
+
     std::list<WorldObject*> targets;
+
+    // 计算法术的半径范围
     float radius = spellEffectInfo.CalcRadius(m_caster);
     // Workaround for some spells that don't have RadiusEntry set in dbc (but SpellRange instead)
     if (G3D::fuzzyEq(radius, 0.f))
         radius = m_spellInfo->GetMaxRange(m_spellInfo->IsPositiveEffect(spellEffectInfo.EffectIndex), m_caster, this);
-
     radius *= m_spellValue->RadiusMod;
 
+    // 按照法术中心点与其半径范围，搜索目标 cell 所在的所有 objects，并计算其相对于中心点的距离小于半径范围的，则属于生效的怪
     SearchAreaTargets(targets, radius, center, referer, targetType.GetObjectType(), targetType.GetCheckType(), spellEffectInfo.ImplicitTargetConditions);
 
     CallScriptObjectAreaTargetSelectHandlers(targets, spellEffectInfo.EffectIndex, targetType);
@@ -2402,8 +2538,9 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         uint32 hitMask = PROC_HIT_NONE;
 
         // Spells with this flag cannot trigger if effect is cast on self
-        bool const canEffectTrigger = !spell->m_spellInfo->HasAttribute(SPELL_ATTR3_CANT_TRIGGER_PROC) && spell->unitTarget->CanProc() &&
-            (spell->CanExecuteTriggersOnHit(EffectMask) || MissCondition == SPELL_MISS_IMMUNE || MissCondition == SPELL_MISS_IMMUNE2);
+        bool const canEffectTrigger = !spell->m_spellInfo->HasAttribute(SPELL_ATTR3_CANT_TRIGGER_PROC) &&
+                                      spell->unitTarget->CanProc() &&
+                                      (spell->CanExecuteTriggersOnHit(EffectMask) || MissCondition == SPELL_MISS_IMMUNE || MissCondition == SPELL_MISS_IMMUNE2);
 
         // Trigger info was not filled in Spell::prepareDataForTriggerSystem - we do it now
         if (canEffectTrigger && !procAttacker && !procVictim)
@@ -2920,18 +3057,23 @@ void Spell::DoTriggersOnSpellHit(Unit* unit, uint8 effMask)
 
 bool Spell::UpdateChanneledTargetList()
 {
+    // 该函数的处理极有可能是处理那种增益光环的东西，比如释放后，范围内友军增加伤害等等
+
+    // 如果当前法术不是持续性法术(比如光环型的法术，施法后可以持续一定时间)
     // Not need check return true
     if (m_channelTargetEffectMask == 0)
         return true;
 
     uint8 channelTargetEffectMask = m_channelTargetEffectMask;
+
+    // 计算效果掩码
     uint8 channelAuraMask = 0;
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
         if (spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AURA))
             channelAuraMask |= 1 << spellEffectInfo.EffectIndex;
-
     channelAuraMask &= channelTargetEffectMask;
 
+    // 计算法术的范围值
     float range = 0;
     if (channelAuraMask)
     {
@@ -2939,24 +3081,29 @@ bool Spell::UpdateChanneledTargetList()
         if (Player* modOwner = m_caster->GetSpellModOwner())
             modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_RANGE, range, this);
 
+        // 法术范围容忍百分之10%的范围误差，这是为了避免因为微小的移动而导致法术效果意外中断
         // add little tolerance level
         range += std::min(MAX_SPELL_RANGE_TOLERANCE, range*0.1f); // 10% but no more than MAX_SPELL_RANGE_TOLERANCE
     }
 
+    // Select...Targets 函数构造 m_UniqueTargetInfo 成员
     for (TargetInfo& targetInfo : m_UniqueTargetInfo)
     {
+        // 检查如果法术命中了目标且掩码判断条件通过
         if (targetInfo.MissCondition == SPELL_MISS_NONE && (channelTargetEffectMask & targetInfo.EffectMask))
         {
             Unit* unit = m_caster->GetGUID() == targetInfo.TargetGUID ? m_caster->ToUnit() : ObjectAccessor::GetUnit(*m_caster, targetInfo.TargetGUID);
             if (!unit)
                 continue;
 
+            // 检测目标是否已经死亡
             if (IsValidDeadOrAliveTarget(unit))
             {
                 if (channelAuraMask & targetInfo.EffectMask)
                 {
                     if (AuraApplication * aurApp = unit->GetAuraApplication(m_spellInfo->Id, m_originalCasterGUID))
                     {
+                        // 如果施法者与目标unit的距离超出了一定的范围，则移除目标身上的光环效果
                         if (m_caster != unit && !m_caster->IsWithinDistInMap(unit, range))
                         {
                             targetInfo.EffectMask &= ~aurApp->GetEffectMask();
@@ -2979,6 +3126,9 @@ bool Spell::UpdateChanneledTargetList()
 
 SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const* triggeredByAura)
 {
+    // TC_LOG_INFO("ngpong", "{}", boost::stacktrace::to_string(boost::stacktrace::stacktrace()));
+
+    // 如果施法需要使用物品，则记录该物品的GUID
     if (m_CastItem)
     {
         m_castItemGUID = m_CastItem->GetGUID();
@@ -2990,12 +3140,25 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         m_castItemEntry = 0;
     }
 
+    // 1. 初始化 Spell::m_targets 成员为 targets 的 copy
+    // 2. 初始化 m_targets 的 m_objectTarget 成员
+    // 3. 会有一些网络包与spell(this)成员类型逻辑不匹配时的矫正工作
     InitExplicitTargets(targets);
 
+    // 此处用于处理法术光环缩放的逻辑，光环效果的强度需要根据施法者或目标的某些属性进行动态调整
     // Fill aura scaling information
     if (Unit* unitCaster = m_caster->ToUnit())
     {
-        if (unitCaster->IsControlledByPlayer() && !m_spellInfo->IsPassive() && m_spellInfo->SpellLevel && !m_spellInfo->IsChanneled() && !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_SCALING))
+        // 施法者必须是由玩家控制的单位（例如玩家角色或玩家控制的宠物）
+        // 法术不是被动法术
+        // 法术不是引导法术
+        // 法术没有被触发性标志忽略光环缩放（TRIGGERED_IGNORE_AURA_SCALING）
+        // 法术具有定义的法术等级
+        if (unitCaster->IsControlledByPlayer() &&
+            !m_spellInfo->IsPassive() &&
+             m_spellInfo->SpellLevel &&
+            !m_spellInfo->IsChanneled() &&
+            !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_SCALING))
         {
             for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
             {
@@ -3016,15 +3179,21 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
+    // 设置法术状态，准备中
     m_spellState = SPELL_STATE_PREPARING;
 
+    // 检测法术是否有光环触发，如果是则设置成员
     if (triggeredByAura)
-        m_triggeredByAuraSpell  = triggeredByAura->GetSpellInfo();
+        m_triggeredByAuraSpell = triggeredByAura->GetSpellInfo();
 
+    // 设置法术 EventHandler，过期时间为 1ms
+    // 该 handler 会在 Unit::Update 的时候被调用
+    // 该 Event 最终会调用到 Spell::Update 这个核心逻辑上
     // create and add update event for this spell
     _spellEvent = new SpellEvent(this);
     m_caster->m_Events.AddEvent(_spellEvent, m_caster->m_Events.CalculateTime(1ms));
 
+    // 检查法术是否被禁用
     // check disables
     if (DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, m_caster))
     {
@@ -3033,23 +3202,33 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         return SPELL_FAILED_SPELL_UNAVAILABLE;
     }
 
+    // 如果施法者已经在施放另一个法术，且当前法术不允许在施法过程中被触发，函数会发送施法进度失败的结果，并结束施法过程
     // Prevent casting at cast another spell (ServerSide check)
-    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CAST_IN_PROGRESS) && m_caster->ToUnit() && m_caster->ToUnit()->IsNonMeleeSpellCast(false, true, true, m_spellInfo->Id == 75) && m_cast_count)
+    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CAST_IN_PROGRESS) &&
+        m_caster->ToUnit() &&
+        m_caster->ToUnit()->IsNonMeleeSpellCast(false, true, true, m_spellInfo->Id == 75) &&
+        m_cast_count)
     {
         SendCastResult(SPELL_FAILED_SPELL_IN_PROGRESS);
         finish(false);
         return SPELL_FAILED_SPELL_IN_PROGRESS;
     }
 
+    // 加载当前 Spell 对应绑定的 script
+    // 依据 spell_id 来加载，关于 spell_id 与 scripts 的绑定关系通过 SELECT spell_id, ScriptName FROM spell_script_names 查询
     LoadScripts();
 
+    // 计算并设置法术消耗的能量，对于使用物品施法的情况，消耗能量为0
     // Fill cost data (do not use power for item casts)
     m_powerCost = m_CastItem ? 0 : m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask, this);
 
+    // 根据触发标志和是否使用施法物品，设置是否需要连击点
     // Set combo point requirement
     if ((_triggeredCastFlags & TRIGGERED_IGNORE_COMBO_POINTS) || m_CastItem)
         m_needComboPoints = false;
 
+    // 调用CheckCast方法检查施法条件
+    // 关于 CheckCast 参考的注释参考函数内部
     uint32 param1 = 0, param2 = 0;
     SpellCastResult result = CheckCast(true, &param1, &param2);
     if (result != SPELL_CAST_OK && !IsAutoRepeat())          //always cast autorepeat dummy for triggering
@@ -3073,9 +3252,11 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         return result;
     }
 
+    // 构造一些Spell内部的成员数据用于 trigger system
     // Prepare data for triggers
     prepareDataForTriggerSystem();
 
+    // 计算施法所需消耗的时间
     if (Player* player = m_caster->ToPlayer())
     {
         if (!player->GetCommandStatus(CHEAT_CASTTIME))
@@ -3089,10 +3270,16 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    // 不允许在移动时施放具有施法时间的法术，除非法术允许移动时施放
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
     // (even if they are interrupted on moving, spells with almost immediate effect get to have their effect processed before movement interrupter kicks in)
-    if ((m_spellInfo->IsChanneled() || m_casttime) && m_caster->GetTypeId() == TYPEID_PLAYER && !(m_caster->ToPlayer()->IsCharmed() && m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) && m_caster->ToPlayer()->isMoving() && (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
+    if ((m_spellInfo->IsChanneled() || m_casttime) &&
+        m_caster->GetTypeId() == TYPEID_PLAYER &&
+        !(m_caster->ToPlayer()->IsCharmed() &&
+        m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) &&
+        m_caster->ToPlayer()->isMoving() &&
+        (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
     {
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
         if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
@@ -3103,6 +3290,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
+    // 对于需要焦点目标的情况，设置焦点目标
     // Creatures focus their target when possible
     if (m_casttime && m_caster->IsCreature() && !m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_POSSESSED))
     {
@@ -3114,11 +3302,13 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
             m_caster->ToCreature()->SetSpellFocus(this, nullptr);
     }
 
+    // 初始化施法计时器
     // set timer base at cast time
     ReSetTimer();
 
     TC_LOG_DEBUG("spells", "Spell::prepare: spell id {} source {} caster {} customCastFlags {} mask {}", m_spellInfo->Id, m_caster->GetEntry(), m_originalCaster ? m_originalCaster->GetEntry() : -1, _triggeredCastFlags, m_targets.GetTargetMask());
 
+    // 如果法术被标记为直接触发（TRIGGERED_CAST_DIRECTLY），且不是引导类型的法术，或者是引导类型但没有最大持续时间，这意味着这类法术可以立即执行，不需要等待施法时间
     //Containers for channeled spells have to be set
     /// @todoApply this to all cast spells if needed
     // Why check duration? 29350: channelled triggers channelled
@@ -3128,6 +3318,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     {
         if (Unit* unitCaster = m_caster->ToUnit())
         {
+            // 如果法术会打破隐身状态，并且没有设置忽略光环中断标志（TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS），则移除施法者身上所有会因施法而中断的光环，例如隐身或潜行状态
             // stealth must be removed at cast starting (at show channel bar)
             // skip triggered spell (item equip spell casting and other not explicit character casts/item uses)
             if (!(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
@@ -3143,13 +3334,17 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
                 }
             }
 
+            // 此处主要逻辑就是设置 m_currentSpells 成员，并中断一些同类型且正在施法中的法术
             unitCaster->SetCurrentCastSpell(this);
         }
+        // 想客户端发送 ，则直接执行 SMSG_SPELL_START 消息
         SendSpellStart();
 
+        // 触发全局冷却
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_GCD))
             TriggerGlobalCooldown();
 
+        // 触发 AI 行为钩子
         // Call CreatureAI hook OnSpellStart
         if (Creature* caster = m_caster->ToCreature())
             if (caster->IsAIEnabled())
@@ -3177,6 +3372,7 @@ void Spell::cancel()
     m_autoRepeat = false;
     switch (oldState)
     {
+        // 如果法术处于准备（SPELL_STATE_PREPARING）或延迟（SPELL_STATE_DELAYED）状态，取消全局冷却时间，发送中断和施法失败的消息
         case SPELL_STATE_PREPARING:
             CancelGlobalCooldown();
             [[fallthrough]];
@@ -3247,6 +3443,7 @@ void Spell::_cast(bool skipCheck)
         return;
     }
 
+    // 当 m_objectTargetGUID 不为空并且 m_objectTarget 为空的情况下代表施法的过程中丢失了目标
     // cancel at lost explicit target during cast
     if (m_targets.GetObjectTargetGUID() && !m_targets.GetObjectTarget())
     {
@@ -3260,6 +3457,8 @@ void Spell::_cast(bool skipCheck)
         // should be done before the spell is actually executed
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
 
+        // 如果法术是有害的，并且施法者有宠物或其他控制的单位，那么这些单位将开始攻击法术的目标
+        // 这里用以操控AI
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
@@ -3271,8 +3470,10 @@ void Spell::_cast(bool skipCheck)
                                 controlledAI->OwnerAttacked(target);
     }
 
+    // 设置已执行标志，用于衔接 Unit::InterruptSpell(Spell::IsInterruptable) 函数的运行
     SetExecutedCurrently(true);
 
+    // 如果施法者有任何可以影响此次施法的法术修改者，现在会被应用
     // Should this be done for original caster?
     Player* modOwner = m_caster->GetSpellModOwner();
     if (modOwner)
@@ -3282,6 +3483,7 @@ void Spell::_cast(bool skipCheck)
         modOwner->SetSpellModTakingSpell(this, true);
     }
 
+    // 调用 m_loadedScripts 中的一些函数
     CallScriptBeforeCastHandlers();
 
     // skip check if done already (for instant cast spells for example)
@@ -3299,6 +3501,7 @@ void Spell::_cast(bool skipCheck)
             SetExecutedCurrently(false);
         };
 
+        // CheckCast执行一系列复杂的检查
         uint32 param1 = 0, param2 = 0;
         SpellCastResult castResult = CheckCast(false, &param1, &param2);
         if (castResult != SPELL_CAST_OK)
@@ -3355,14 +3558,16 @@ void Spell::_cast(bool skipCheck)
             }
         }
     }
+    // 对于非玩家控制的生物施法者，如果有指定的施法目标，会确保生物面向目标
     // The spell focusing is making sure that we have a valid cast target guid when we need it so only check for a guid value here.
     if (Creature* creatureCaster = m_caster->ToCreature())
         if (!creatureCaster->GetTarget().IsEmpty() && !creatureCaster->HasUnitFlag(UNIT_FLAG_POSSESSED))
             if (WorldObject const* target = ObjectAccessor::GetUnit(*creatureCaster, creatureCaster->GetTarget()))
                 creatureCaster->SetInFront(target);
 
+    // 此函数会依据法术的具体效果，进一步确认选择的目标，比如有一些区域范围的法术并不是客户端发给服务器，而是服务器自己独立运算
     SelectSpellTargets();
-
+    // 可能在上一步骤中就中断法术施法
     // Spell may be finished after target map check
     if (m_spellState == SPELL_STATE_FINISHED)
     {
@@ -3376,19 +3581,24 @@ void Spell::_cast(bool skipCheck)
         return;
     }
 
+    // 如果正在释放的法术具有固定属性 SPELL_ATTR1_DISMISS_PET，则解散玩家的宠物
     if (Unit* unitCaster = m_caster->ToUnit())
         if (m_spellInfo->HasAttribute(SPELL_ATTR1_DISMISS_PET))
             if (Creature* pet = ObjectAccessor::GetCreature(*m_caster, unitCaster->GetPetGUID()))
                 pet->DespawnOrUnsummon();
 
+    // 检查施法者身上是否存在 SPELL_AURA_ADD_TARGET_TRIGGER 的光环，并用于初始化 m_hitTriggerSpells 成员
+    // 表示为命中时触发的额外效果
     PrepareTriggersExecutedOnHit();
 
     CallScriptOnCastHandlers();
 
+    // 更新交易槽中的物品目标信息
     // traded items have trade slot instead of guid in m_itemTargetGUID
     // set to real guid to be sent later to the client
     m_targets.UpdateTradeSlotItem();
 
+    // 更新成就相关的一些东西
     if (Player* player = m_caster->ToPlayer())
     {
         if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CAST_ITEM) && m_CastItem)
@@ -3400,6 +3610,7 @@ void Spell::_cast(bool skipCheck)
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL, m_spellInfo->Id);
     }
 
+    // 扣除施法所需的资源和材料
     if (!(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
     {
         // Powers have to be taken before SendSpellGo
@@ -3414,17 +3625,21 @@ void Spell::_cast(bool skipCheck)
     }
 
     // CAST SPELL
+    // 向客户端发送法术的冷却时间信息
     SendSpellCooldown();
 
     HandleLaunchPhase();
 
+    // 发送法术的完整动画信息，包括速度，轨迹等等
     // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
     SendSpellGo();
 
+    // 非引导（非持续施法）的情况下，如果施法者是一个生物（Creature），那么它会释放或结束它对法术焦点的持有
     if (!m_spellInfo->IsChanneled())
         if (Creature* creatureCaster = m_caster->ToCreature())
             creatureCaster->ReleaseSpellFocus(this);
 
+    // 根据法术的特性，处理即时效果或设置延迟
     // Okay, everything is prepared. Now we need to distinguish between immediate and evented delayed spells
     if (m_spellInfo->Speed > 0.0f && !m_spellInfo->IsChanneled())
     {
@@ -3731,6 +3946,7 @@ void Spell::SendSpellCooldown()
 
 void Spell::update(uint32 difftime)
 {
+    // 确保法术施放过程中重要对象的引用都是准确和有效的，从而避免在施法过程中可能出现的引用无效对象的问题
     // update pointers based at it's GUIDs
     if (!UpdatePointers())
     {
@@ -3739,6 +3955,7 @@ void Spell::update(uint32 difftime)
         return;
     }
 
+    // 检查目标对象是否已被移除，如果目标GUID存在但目标对象不存在，同样取消法术
     if (m_targets.GetUnitTargetGUID() && !m_targets.GetUnitTarget())
     {
         TC_LOG_DEBUG("spells", "Spell {} is cancelled due to removal of target.", m_spellInfo->Id);
@@ -3746,6 +3963,7 @@ void Spell::update(uint32 difftime)
         return;
     }
 
+    // 对于玩家施法者，如果在施法过程中移动，并且法术的中断标志包含移动中断，则根据法术的特性决定是否取消施法
     // check if the player caster has moved before the spell finished
     if (m_caster->GetTypeId() == TYPEID_PLAYER && m_timer != 0 &&
         m_caster->ToPlayer()->isMoving() && m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT &&
@@ -3764,8 +3982,10 @@ void Spell::update(uint32 difftime)
 
     switch (m_spellState)
     {
+        // 法术准备状态，prepare 阶段会这么设置
         case SPELL_STATE_PREPARING:
         {
+            // 矫正施法计时器
             if (m_timer > 0)
             {
                 if (difftime >= (uint32)m_timer)
@@ -3774,15 +3994,22 @@ void Spell::update(uint32 difftime)
                     m_timer -= difftime;
             }
 
+            // 如果
+            //  1. 计时器过期
+            //  2. 法术不会再玩家的下一次近战攻击中自动施放
+            //  3. 不是自动释放法术
+            // 则释放法术
             if (m_timer == 0 && !m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat())
                 // don't CheckCast for instant spells - done in spell::prepare, skip duplicate checks, needed for range checks for example
                 cast(!m_casttime);
             break;
         }
+        // 此状态应该是对应着一些持续性施法的效果，比如应用一些光环
         case SPELL_STATE_CASTING:
         {
             if (m_timer)
             {
+                // 此处应该是用于处理一些持续性施法的逻辑的，用于 Update 当玩家超出光环范围后，需要移除其身上光环的逻辑
                 // check if there are alive targets left
                 if (!UpdateChanneledTargetList())
                 {
@@ -3804,9 +4031,11 @@ void Spell::update(uint32 difftime)
                 }
             }
 
+            // 时间到期，则取消(完成)持续性法术的施法
             if (m_timer == 0)
             {
                 SendChannelUpdate(0);
+                // 执行法术完成动作
                 finish();
 
                 // We call the hook here instead of in Spell::finish because we only want to call it for completed channeling. Everything else is handled by interrupts
@@ -3823,10 +4052,14 @@ void Spell::update(uint32 difftime)
 
 void Spell::finish(bool ok)
 {
+    // 如果法术已经处于完成则直接退出
     if (m_spellState == SPELL_STATE_FINISHED)
         return;
+
+    // 更新法术状态
     m_spellState = SPELL_STATE_FINISHED;
 
+    // 如果没有施法者
     if (!m_caster)
         return;
 
@@ -3834,12 +4067,15 @@ void Spell::finish(bool ok)
     if (!unitCaster)
         return;
 
+    // 持续性法术则更新中断掩码，它们应该会在未来的某个时间段被中断且清除掉
     if (m_spellInfo->IsChanneled())
         unitCaster->UpdateInterruptMask();
 
+    // 如果施法者处于施法状态（UNIT_STATE_CASTING）且不在执行非近战施法，则清除施法状态
     if (unitCaster->HasUnitState(UNIT_STATE_CASTING) && !unitCaster->IsNonMeleeSpellCast(false, false, true))
         unitCaster->ClearUnitState(UNIT_STATE_CASTING);
 
+    // 这里应该是一些召唤物的处理，所以召唤东西也属于是持续性法术(channel spell)
     // Unsummon summon as possessed creatures on spell cancel
     if (m_spellInfo->IsChanneled() && unitCaster->GetTypeId() == TYPEID_PLAYER)
     {
@@ -3850,12 +4086,14 @@ void Spell::finish(bool ok)
                 ((Puppet*)charm)->UnSummon();
     }
 
+    // 如果是生物则释放施法焦点（即某些法术在释放的时候需要专注一个目标）
     if (Creature* creatureCaster = unitCaster->ToCreature())
         creatureCaster->ReleaseSpellFocus(this);
 
     if (!ok)
         return;
 
+    // 处理由特定法术召唤的单位（例如，雕像）的解散动作
     if (unitCaster->GetTypeId() == TYPEID_UNIT && unitCaster->IsSummon())
     {
         // Unsummon statue
@@ -3872,6 +4110,7 @@ void Spell::finish(bool ok)
         }
     }
 
+    // 有些法术在释放完毕后会自动重置攻击者的动作，这里用于重置武器的攻击计时器
     if (IsAutoActionResetSpell())
     {
         bool found = false;
@@ -3894,6 +4133,7 @@ void Spell::finish(bool ok)
         }
     }
 
+    // 对于玩家施法者，如果法术不是由光环触发的，则更新药水冷却时间
     // potions disabled by client, send event "not in combat" if need
     if (unitCaster->GetTypeId() == TYPEID_PLAYER)
     {
@@ -3901,6 +4141,7 @@ void Spell::finish(bool ok)
             unitCaster->ToPlayer()->UpdatePotionCooldown(this);
     }
 
+    // 如果法术具有停止攻击目标的属性，则施法者停止攻击
     // Stop Attack for some spells
     if (m_spellInfo->HasAttribute(SPELL_ATTR0_STOP_ATTACK_TARGET))
         unitCaster->AttackStop();
@@ -5084,6 +5325,34 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
 
 SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint32* param2 /*= nullptr*/)
 {
+    // 死亡状态检查：如果施法者已经死亡，而法术不是被动法术且不允许在死亡状态下施放，则返回施法失败
+    //
+    // 免疫状态下的互动限制：如果施法者在免疫状态下试图与某些游戏对象互动，可能会因为作弊防范而失败
+    //
+    // 冷却时间检查：防止作弊，确保施法者遵守冷却时间的限制
+    //
+    // 全局冷却：如果法术受到全局冷却的影响，且当前状态下不允许忽略全局冷却，则施法失败
+    //
+    // 位置检查：某些法术只能在室内或室外使用，如果施法者不在适当的位置，则施法失败
+    //
+    // 形态检查：某些法术需要施法者处于特定的形态
+    //
+    // 光环状态检查：如果法术需要施法者或目标拥有或不拥有特定的光环状态，且条件不满足，则施法失败
+    //
+    // 范围检查: 检查目标是否在法术的有效施法范围内。如果目标超出最大或最小施法范围，施法将失败
+    //
+    // 移动状态检查：如果施法者在移动中，且法术不允许在移动中施放，则施法失败
+    //
+    // 施法者和目标之间的关系：某些法术可能要求目标是友好的或敌对的，如果目标与要求不符，则施法失败
+    //
+    // 特定目标要求：比如，一些法术可能只能对宠物或拥有者施放
+    //
+    // 战斗状态检查：如果施法者在战斗中，而法术不能在战斗中使用，则施法失败
+    //
+    // 连击点检查：如果法术需要连击点，而施法者没有或目标没有足够的连击点，则施法失败
+    //
+    // 特定条件检查：基于数据库的条件，如特定事件或状态下才能施放的法术
+
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
         return SPELL_FAILED_CASTER_DEAD;
@@ -5101,15 +5370,20 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (m_caster->GetTypeId() == TYPEID_PLAYER)
         {
             //can cast triggered (by aura only?) spells while have this flag
-            if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CASTER_AURASTATE) && m_caster->ToPlayer()->HasFlag(PLAYER_FLAGS, PLAYER_ALLOW_ONLY_ABILITY))
+            if (!(_triggeredCastFlags & TRIGGERED_IGNORE_CASTER_AURASTATE) &&
+                m_caster->ToPlayer()->HasFlag(PLAYER_FLAGS, PLAYER_ALLOW_ONLY_ABILITY))
                 return SPELL_FAILED_SPELL_IN_PROGRESS;
 
             // check if we are using a potion in combat for the 2nd+ time. Cooldown is added only after caster gets out of combat
-            if (!IsIgnoringCooldowns() && m_caster->ToPlayer()->GetLastPotionId() && m_CastItem && (m_CastItem->IsPotion() || m_spellInfo->IsCooldownStartedOnEvent()))
+            if (!IsIgnoringCooldowns() &&
+                m_caster->ToPlayer()->GetLastPotionId() &&
+                m_CastItem &&
+                (m_CastItem->IsPotion() || m_spellInfo->IsCooldownStartedOnEvent()))
                 return SPELL_FAILED_NOT_READY;
         }
 
-        if (m_caster->ToUnit() && !m_caster->ToUnit()->GetSpellHistory()->IsReady(m_spellInfo, m_castItemEntry, IsIgnoringCooldowns()))
+        if (m_caster->ToUnit() &&
+            !m_caster->ToUnit()->GetSpellHistory()->IsReady(m_spellInfo, m_castItemEntry, IsIgnoringCooldowns()))
         {
             if (m_triggeredByAuraSpell)
                 return SPELL_FAILED_DONT_REPORT;
@@ -5307,7 +5581,10 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         float x, y, z;
         m_targets.GetDstPos()->GetPosition(x, y, z);
 
-        if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) && !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) && !DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, nullptr, SPELL_DISABLE_LOS) && !m_caster->IsWithinLOS(x, y, z, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2))
+        if (!m_spellInfo->HasAttribute(SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS) &&
+            !m_spellInfo->HasAttribute(SPELL_ATTR5_SKIP_CHECKCAST_LOS_CHECK) &&
+            !DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, m_spellInfo->Id, nullptr, SPELL_DISABLE_LOS) &&
+            !m_caster->IsWithinLOS(x, y, z, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2))
             return SPELL_FAILED_LINE_OF_SIGHT;
     }
 
@@ -6407,6 +6684,7 @@ void Spell::CheckDst()
 
 SpellCastResult Spell::CheckRange(bool strict) const
 {
+    // 不检查瞬发的法术
     // Don't check for instant cast spells
     if (!strict && m_casttime == 0)
         return SPELL_CAST_OK;
@@ -6414,6 +6692,7 @@ SpellCastResult Spell::CheckRange(bool strict) const
     float minRange, maxRange;
     std::tie(minRange, maxRange) = GetMinMaxRange(strict);
 
+    // 非严格模式下，如果法术有指定的施法范围（非近战范围），则最大距离将增加一个容忍度
     // dont check max_range to strictly after cast
     if (m_spellInfo->RangeEntry && m_spellInfo->RangeEntry->Flags != SPELL_RANGE_MELEE && !strict)
         maxRange += std::min(MAX_SPELL_RANGE_TOLERANCE, maxRange*0.1f); // 10% but no more than MAX_SPELL_RANGE_TOLERANCE
@@ -6425,23 +6704,30 @@ SpellCastResult Spell::CheckRange(bool strict) const
     Unit* target = m_targets.GetUnitTarget();
     if (target && target != m_caster)
     {
+        // 如果施法者与目标之间的距离大于 maxRange
         if (m_caster->GetExactDistSq(target) > maxRange)
             return SPELL_FAILED_OUT_OF_RANGE;
 
+        // 如果施法者与目标之间的距离小于 minRange
         if (minRange > 0.0f && m_caster->GetExactDistSq(target) < minRange)
             return SPELL_FAILED_OUT_OF_RANGE;
 
+        // 朝向检查，如果需要的话，则检查目标与施法者是否处于 180° 的朝向范围内
         if (m_caster->GetTypeId() == TYPEID_PLAYER &&
-            (m_spellInfo->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT) && !m_caster->HasInArc(static_cast<float>(M_PI), target))
+            (m_spellInfo->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT) &&
+            !m_caster->HasInArc(static_cast<float>(M_PI), target))
             return SPELL_FAILED_UNIT_NOT_INFRONT;
     }
 
+    // 如果目标是一个 game_object
     if (GameObject* goTarget = m_targets.GetGOTarget())
     {
+        // 这里我们要判断 game_obejct 与 caster 是否处于可交互的半径范围内，具体逻辑参照里面的注释
         if (!goTarget->IsAtInteractDistance(m_caster->ToPlayer(), m_spellInfo))
             return SPELL_FAILED_OUT_OF_RANGE;
     }
 
+    // 如果法术的目标是一个指定的地点（有目标位置但没有轨迹），同样进行最大和最小距离的检查
     if (m_targets.HasDst() && !m_targets.HasTraj())
     {
         if (m_caster->GetExactDistSq(m_targets.GetDstPos()) > maxRange)
@@ -7115,6 +7401,8 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
 
 void Spell::Delayed() // only called in DealDamage()
 {
+    // 这个函数主要处理的是施法者在施放法术过程中受到打断，导致施法时间延长的情况
+
     Player* playerCaster = m_caster->ToPlayer();
     if (!playerCaster)
         return;
@@ -7225,6 +7513,7 @@ bool Spell::UpdatePointers()
             return false;
     }
 
+    // 此处是为了保证 m_targets 中的目标信息是最新的，比如位置(可能有)(看起来只是判断了存在运输工具的情况)，施法物品(可能有)
     m_targets.Update(m_caster);
 
     // further actions done only for dest targets
@@ -7234,6 +7523,7 @@ bool Spell::UpdatePointers()
     // cache last transport
     WorldObject* transport = nullptr;
 
+    // 更新目的地，这里似乎也是仅处理有传送工具的情况
     // update effect destinations (in case of moved transport dest target)
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
     {
@@ -7449,6 +7739,7 @@ SpellEvent::~SpellEvent()
 
 bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
 {
+    // 如果法术还未执行完，则 Update spell
     // update spell if it is not finished
     if (m_Spell->getState() != SPELL_STATE_FINISHED)
         m_Spell->update(p_time);
@@ -7456,6 +7747,7 @@ bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
     // check spell state to process
     switch (m_Spell->getState())
     {
+        // 如果法术已完成并且可以被删除，则此事件完成，返回true，表示此事件可以被移除
         case SPELL_STATE_FINISHED:
         {
             // spell was finished, check deletable state
@@ -7530,6 +7822,7 @@ bool SpellEvent::Execute(uint64 e_time, uint32 p_time)
         }
     }
 
+    // 法术执行未完成，继续加入 m_Events 等待下次 tick 的时候更新
     // spell processing not complete, plan event on the next update interval
     m_Spell->GetCaster()->m_Events.AddEvent(this, Milliseconds(e_time + 1), false);
     return false;                                           // event not complete

@@ -61,14 +61,19 @@ void UnitAI::AttackStartCaster(Unit* victim, float dist)
 
 void UnitAI::DoMeleeAttackIfReady()
 {
+    // 此处用于控制生物AI自动攻击
+
     if (me->HasUnitState(UNIT_STATE_CASTING))
         return;
 
+    // 获取受害者对象
     Unit* victim = me->GetVictim();
 
+    // 计算我和受害者之间是否处于合法的近战进攻距离
     if (!me->IsWithinMeleeRange(victim))
         return;
 
+    // 执行和 Player::Update 处类似的逻辑
     //Make sure our attack is ready and we aren't currently casting before checking distance
     if (me->isAttackReady())
     {
@@ -194,6 +199,7 @@ void UnitAI::FillAISpellInfo()
     AISpellInfoType* AIInfo = AISpellInfo;
     for (uint32 i = 0; i < sSpellMgr->GetSpellInfoStoreSize(); ++i, ++AIInfo)
     {
+        // SpellInfos 通过 record 初始化的
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(i);
         if (!spellInfo)
             continue;

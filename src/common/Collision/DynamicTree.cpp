@@ -83,6 +83,7 @@ struct DynTreeImpl : public ParentTree/*, public Intersectable*/
 
     void balance()
     {
+        // 此处基类的 Node 模板形参是 BIHWrap<GameObjectModel>
         base::balance();
         unbalanced_times = 0;
     }
@@ -92,6 +93,8 @@ struct DynTreeImpl : public ParentTree/*, public Intersectable*/
         if (empty())
             return;
 
+        // rebalance_timer 一开始是 CHECK_TREE_PERIOD，每次 Update 减去 difftime，直到 < 0 时候，则逻辑通过
+        // unbalanced_times 每次插入或者删除都会自增
         rebalance_timer.Update(difftime);
         if (rebalance_timer.Passed())
         {

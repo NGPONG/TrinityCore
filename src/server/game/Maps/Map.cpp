@@ -115,6 +115,9 @@ Map::~Map()
 
 bool Map::ExistMap(uint32 mapid, int gx, int gy)
 {
+    // maps 文件的组织格式: 0000<map_id> 00<grid_x> 00<grid_y> .map<file_extension>
+    //                      ----         --         --         ----
+
     std::string fileName = Trinity::StringFormat("{}maps/{:03}{:02}{:02}.map", sWorld->GetDataPath(), mapid, gx, gy);
 
     bool ret = false;
@@ -130,6 +133,7 @@ bool Map::ExistMap(uint32 mapid, int gx, int gy)
         map_fileheader header;
         if (fread(&header, sizeof(header), 1, pf) == 1)
         {
+            // 地图存在一些魔法数字，需要校验是否正确 map_magic && version_magix
             if (header.mapMagic.asUInt != MapMagic.asUInt || header.versionMagic != MapVersionMagic)
                 TC_LOG_ERROR("maps", "Map file '{}' is from an incompatible map version (%.*s v{}), %.*s v{} is expected. Please pull your source, recompile tools and recreate maps using the updated mapextractor, then replace your old map files with new files. If you still have problems search on forum for error TCE00018.",
                     fileName, 4, header.mapMagic.asChar, header.versionMagic, 4, MapMagic.asChar, MapVersionMagic);
@@ -146,8 +150,14 @@ bool Map::ExistVMap(uint32 mapid, int gx, int gy)
 {
     if (VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager())
     {
+        // 如果允许 <高度> 计算或 LOS 计算才计算 VMap
+        // 意思是于允许计算物理？
         if (vmgr->isMapLoadingEnabled())
         {
+            // 第一个文件名为: 000<map_id>.vmtree
+
+            // 第二个文件名为: 000<map_id>_00<tileX>_00<tileY>.vmtile
+
             VMAP::LoadResult result = vmgr->existsMap((sWorld->GetDataPath() + "vmaps").c_str(), mapid, gx, gy);
             std::string name = vmgr->getDirFileName(mapid, gx, gy);
             switch (result)
@@ -277,21 +287,29 @@ void Map::DeleteStateMachine()
 }
 
 Map::Map(uint32 id, time_t expiry, uint32 InstanceId, uint8 SpawnMode, Map* _parent):
-_creatureToMoveLock(false), _gameObjectsToMoveLock(false), _dynamicObjectsToMoveLock(false),
-i_mapEntry(sMapStore.LookupEntry(id)), i_spawnMode(SpawnMode), i_InstanceId(InstanceId),
-m_unloadTimer(0), m_VisibleDistance(DEFAULT_VISIBILITY_DISTANCE),
-m_VisibilityNotifyPeriod(DEFAULT_VISIBILITY_NOTIFY_PERIOD),
-m_activeNonPlayersIter(m_activeNonPlayers.end()), _transportsUpdateIter(_transports.end()),
-i_gridExpiry(expiry),
-i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _respawnCheckTimer(0)
+    _creatureToMoveLock(false),
+    _gameObjectsToMoveLock(false),
+    _dynamicObjectsToMoveLock(false),
+    i_mapEntry(sMapStore.LookupEntry(id)),
+    i_spawnMode(SpawnMode),
+    i_InstanceId(InstanceId),
+    m_unloadTimer(0),
+    m_VisibleDistance(DEFAULT_VISIBILITY_DISTANCE),
+    m_VisibilityNotifyPeriod(DEFAULT_VISIBILITY_NOTIFY_PERIOD),
+    m_activeNonPlayersIter(m_activeNonPlayers.end()),
+    _transportsUpdateIter(_transports.end()),
+    i_gridExpiry(expiry),
+    i_scriptLock(false),
+    _respawnTimes(std::make_unique<RespawnListContainer>()),
+    _respawnCheckTimer(0)
 {
     m_parentMap = (_parent ? _parent : this);
-    for (unsigned int idx=0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
+    for (unsigned int idx = 0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
     {
-        for (unsigned int j=0; j < MAX_NUMBER_OF_GRIDS; ++j)
+        for (unsigned int j = 0; j < MAX_NUMBER_OF_GRIDS; ++j)
         {
             //z code
-            GridMaps[idx][j] =nullptr;
+            GridMaps[idx][j] = nullptr;
             setNGrid(nullptr, idx, j);
         }
     }
@@ -303,6 +321,7 @@ i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _r
 
     _weatherUpdateTimer.SetInterval(time_t(1 * IN_MILLISECONDS));
 
+    // 可能会触发 Map scripts 的 OnCreate 回调
     sScriptMgr->OnCreateMap(this);
 }
 
@@ -589,6 +608,10 @@ void Map::LoadGrid(float x, float y)
 
 bool Map::AddPlayerToMap(Player* player)
 {
+    TC_LOG_INFO("ngpong", "add player to map. ptr [{}], player_name [{}]", (void *)player, player->GetName());
+
+    // Trinity::ComputeCellCoord 计算的是以 cell 为基准的在地图上的 x, y；目前看上去 x,y 轴各有 64 个 grid，每个 grid 中
+    // 又包含了 8x8 的 cells，所以 x,y 轴的最大值就是 512
     CellCoord cellCoord = Trinity::ComputeCellCoord(player->GetPositionX(), player->GetPositionY());
     if (!cellCoord.IsCoordValid())
     {
@@ -596,21 +619,32 @@ bool Map::AddPlayerToMap(Player* player)
         return false;
     }
 
+    // 此处将其转换为具体的 Grid 还有 Cell 的 x,y
     Cell cell(cellCoord);
+
     EnsureGridLoadedForActiveObject(cell, player);
+
+    // 此处的逻辑会将 Player 与 Grid(来自 i_grids 的元素)建立一个连接，并将 Player 放入到 Grid 中的链表()
     AddToGrid(player, cell);
 
     // Check if we are adding to correct map
     ASSERT (player->GetMap() == this);
+
+    // 关联玩家目前所在的地图
     player->SetMap(this);
+
+    // 调用 Unit::AddToWorld()，并将玩家身上的物品也作为 object 添加至 world 当中
     player->AddToWorld();
 
+    // 发送一些消息
     SendInitSelf(player);
     SendInitTransports(player);
 
+    // 更新对象可见性，由于加入地图了后，附近的玩家能看见这个玩家了
     player->m_clientGUIDs.clear();
     player->UpdateObjectVisibility(false);
 
+    // 转换尸体为骨头？
     if (player->IsAlive())
         ConvertCorpseToBones(player->GetGUID());
 
@@ -768,7 +802,16 @@ void Map::UpdatePlayerZoneStats(uint32 oldZone, uint32 newZone)
 
 void Map::Update(uint32 t_diff)
 {
+    // * 每 200ms 更新一次 (实际执行流不是，不知道为什么当初写这个注释，还没找到原因)
+    // * 单独开启一个线程处理更新
+    // * t_diff 表示的是与上一次 tick 的时间间隔
+
+    // TODO(wupeng):
+    // 动态树似乎和 Player 无关，是地图里面的一些静态数据(比如椅子那些)，负责动态装载(cell 装载时)或卸载(cell 卸载时)
     _dynamicTree.update(t_diff);
+
+    // m_mapRefManager 似乎存的是一张地图里面的所有玩家，一次更新这么多玩家不会卡吗？
+    // 下面的逻辑似乎是遍历地图上的所有玩家并处理其网络数据包相关的
     /// update worldsessions for existing players
     for (m_mapRefIter = m_mapRefManager.begin(); m_mapRefIter != m_mapRefManager.end(); ++m_mapRefIter)
     {
@@ -782,6 +825,7 @@ void Map::Update(uint32 t_diff)
         }
     }
 
+    // _respawnCheckTimer 过期计时器的逻辑是每次 tick 的时候进行对比，逻辑似乎是处理生物重新生成的
     /// process any due respawns
     if (_respawnCheckTimer <= t_diff)
     {
@@ -794,6 +838,7 @@ void Map::Update(uint32 t_diff)
     /// update active cells around players and active objects
     resetMarkedCells();
 
+    // 下面两个 visitor 的模板形参不包含对 Player 和 Corpse 的访问
     Trinity::ObjectUpdater updater(t_diff);
     // for creature
     TypeContainerVisitor<Trinity::ObjectUpdater, GridTypeMapContainer  > grid_object_update(updater);
@@ -809,15 +854,22 @@ void Map::Update(uint32 t_diff)
         if (!player || !player->IsInWorld())
             continue;
 
+        // 跟玩家相关的各种逻辑
         // update players at tick
         player->Update(t_diff);
 
+        // 下面就是 AOI 的实现，仅 tick 需要的 obejcts
+        // VisitNearbyCellsOf 会通过地图的可视范围(默认最大，是一个可配置选项)计算其周边的单元格，并对其进行 visit
+
+        // 获取玩家附近的 cell，并对 cell 内的 object 进行 tick
         VisitNearbyCellsOf(player, grid_object_update, world_object_update);
 
+        // 获取玩家远视所看到的 cell，并对 cell 内的 object 进行 tick
         // If player is using far sight or mind vision, visit that object too
         if (WorldObject* viewPoint = player->GetViewpoint())
             VisitNearbyCellsOf(viewPoint, grid_object_update, world_object_update);
 
+        // 获取与玩家战斗距离超过某些码数的 creature 附近 cell 的 tick
         // Handle updates for creatures in combat with player and are more than 60 yards away
         if (player->IsInCombat())
         {
@@ -830,6 +882,7 @@ void Map::Update(uint32 t_diff)
                 VisitNearbyCellsOf(unit, grid_object_update, world_object_update);
         }
 
+        // 应该是类似上面的
         { // Update any creatures that own auras the player has applications of
             std::unordered_set<Unit*> toVisit;
             for (std::pair<uint32, AuraApplication*> pair : player->GetAppliedAuras())
@@ -842,6 +895,7 @@ void Map::Update(uint32 t_diff)
                 VisitNearbyCellsOf(unit, grid_object_update, world_object_update);
         }
 
+        // tick 玩家召唤物附近的 cell
         { // Update player's summons
             std::vector<Unit*> toVisit;
 
@@ -857,6 +911,9 @@ void Map::Update(uint32 t_diff)
         }
     }
 
+    // 非玩家 object 的 tick
+    // 这里不是地图上的一些小怪，小怪的加载还是以玩家的可视距离为准
+    // 应该是一些需要全局动态的东西，比如炮塔，或者一些特殊NPC
     // non-player active objects, increasing iterator in the loop in case of object removal
     for (m_activeNonPlayersIter = m_activeNonPlayers.begin(); m_activeNonPlayersIter != m_activeNonPlayers.end();)
     {
@@ -869,6 +926,7 @@ void Map::Update(uint32 t_diff)
         VisitNearbyCellsOf(obj, grid_object_update, world_object_update);
     }
 
+    // 交通工具？传送？
     for (_transportsUpdateIter = _transports.begin(); _transportsUpdateIter != _transports.end();)
     {
         WorldObject* obj = *_transportsUpdateIter;
@@ -880,6 +938,10 @@ void Map::Update(uint32 t_diff)
         obj->Update(t_diff);
     }
 
+    // 上面的逻辑中，产生修改数据的 Object 最终都会同步到 _updateObjects 成员身上
+    // 然后在这一步骤当中，会遍历那些 Object，并计算它的可视距离，然后同步到其附近的单元格所拥有的 Object 身上
+    //
+    // 人物移动的那些逻辑好像不会更新在这，但是打怪那些会
     SendObjectUpdates();
 
     ///- Process necessary scripts
@@ -900,9 +962,13 @@ void Map::Update(uint32 t_diff)
         _weatherUpdateTimer.Reset();
     }
 
+    // 生物的被 Relocation 后，不会立即更新位置，而是会放在每次 map tick 的时候
     MoveAllCreaturesInMoveList();
+    // 应该是同上的逻辑
     MoveAllGameObjectsInMoveList();
 
+    // 此处是用于处理一些延迟更新可见性状态的逻辑的，延迟更新通过消息 NOTIFY_VISIBILITY_CHANGED 来进行 notify，然后
+    // 在这一步进行处理，而且每个单元格还维护了一个计时器，所以不一定是每次 tick 的时候都会更新，而是等到计时器过期后
     if (!m_mapRefManager.isEmpty() || !m_activeNonPlayers.empty())
         ProcessRelocationNotifies(t_diff);
 
@@ -1092,10 +1158,14 @@ void Map::PlayerRelocation(Player* player, float x, float y, float z, float orie
     Cell old_cell(player->GetPositionX(), player->GetPositionY());
     Cell new_cell(x, y);
 
+    // 更新玩家的坐标数据
     player->Relocate(x, y, z, orientation);
+
+    // 载具相关的
     if (player->IsVehicle())
         player->GetVehicleKit()->RelocatePassengers();
 
+    // 如果是不同的网格则更新
     if (old_cell.DiffGrid(new_cell) || old_cell.DiffCell(new_cell))
     {
         TC_LOG_DEBUG("maps", "Player {} relocation grid[{}, {}]cell[{}, {}]->grid[{}, {}]cell[{}, {}]", player->GetName(), old_cell.GridX(), old_cell.GridY(), old_cell.CellX(), old_cell.CellY(), new_cell.GridX(), new_cell.GridY(), new_cell.CellX(), new_cell.CellY());
@@ -1108,7 +1178,10 @@ void Map::PlayerRelocation(Player* player, float x, float y, float z, float orie
         AddToGrid(player, new_cell);
     }
 
+    // 更新玩家中的一些地形相关的属性
     player->UpdatePositionData();
+
+    // 更新对象可见性，其逻辑大致就是将能够见到(识别到)的 object 放入 m_clientGUIDs 进行维护
     player->UpdateObjectVisibility(false);
 }
 
@@ -2562,8 +2635,14 @@ bool Map::GetAreaInfo(uint32 phaseMask, float x, float y, float z, uint32& flags
     int32 drootId;
     int32 dgroupId;
 
+    // 查询静态(一些建筑物)数据
     bool hasVmapAreaInfo = vmgr->getAreaInfo(GetId(), x, y, vmap_z, vflags, vadtId, vrootId, vgroupId);
+
+    // 查询地图内的动态(玩家、怪等等)数据
     bool hasDynamicAreaInfo = _dynamicTree.getAreaInfo(x, y, dynamic_z, phaseMask, dflags, dadtId, drootId, dgroupId);
+
+    // 不管是查询动态还是静态数据都是以 BIH 为基础然后投射射线查找交点来寻找
+
     auto useVmap = [&]() { check_z = vmap_z; flags = vflags; adtId = vadtId; rootId = vrootId; groupId = vgroupId; };
     auto useDyn = [&]() { check_z = dynamic_z; flags = dflags; adtId = dadtId; rootId = drootId; groupId = dgroupId; };
 
@@ -2742,10 +2821,13 @@ ZLiquidStatus Map::GetLiquidStatus(uint32 phaseMask, float x, float y, float z, 
 void Map::GetFullTerrainStatusForPosition(uint32 phaseMask, float x, float y, float z, PositionFullTerrainStatus& data, uint8 reqLiquidType, float collisionHeight) const
 {
     VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager();
+
     VMAP::AreaAndLiquidData vmapData;
     VMAP::AreaAndLiquidData dynData;
     VMAP::AreaAndLiquidData* wmoData = nullptr;
+
     GridMap* gmap = const_cast<Map*>(this)->GetGrid(x, y);
+
     vmgr->getAreaAndLiquidData(GetId(), x, y, z, reqLiquidType, vmapData);
     _dynamicTree.getAreaAndLiquidData(x, y, z, phaseMask, reqLiquidType, dynData);
 
@@ -2888,6 +2970,8 @@ float Map::GetWaterLevel(float x, float y) const
 
 bool Map::isInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2, uint32 phasemask, LineOfSightChecks checks, VMAP::ModelIgnoreFlags ignoreFlags) const
 {
+    // 检查静态树和动态树，通过射线的方式检测两点之间是否会有遮挡
+
     if ((checks & LINEOFSIGHT_CHECK_VMAP)
       && !VMAP::VMapFactory::createOrGetVMapManager()->isInLineOfSight(GetId(), x1, y1, z1, x2, y2, z2, ignoreFlags))
         return false;

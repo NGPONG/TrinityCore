@@ -353,7 +353,6 @@ void TicketMgr::LoadTickets()
     } while (result->NextRow());
 
     TC_LOG_INFO("server.loading", ">> Loaded {} GM tickets in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
-
 }
 
 void TicketMgr::LoadSurveys()

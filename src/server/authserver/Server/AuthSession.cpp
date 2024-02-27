@@ -54,7 +54,7 @@ typedef struct AUTH_LOGON_CHALLENGE_C
 {
     uint8   cmd;
     uint8   error;
-    uint16  size;
+    uint16  size; // 包体的大小
     uint8   gamename[4];
     uint8   version1;
     uint8   version2;
@@ -66,7 +66,7 @@ typedef struct AUTH_LOGON_CHALLENGE_C
     uint32  timezone_bias;
     uint32  ip;
     uint8   I_len;
-    uint8   I[1];
+    uint8   I[1]; // 账号；视 I_len 长度去读取，实际不是 1bytes，但是会限制整个包体的最大长度不能超过 MAX_ACCEPTED_CHALLENGE_SIZE
 } sAuthLogonChallenge_C;
 static_assert(sizeof(sAuthLogonChallenge_C) == (1 + 1 + 2 + 4 + 1 + 1 + 1 + 2 + 4 + 4 + 4 + 4 + 4 + 1 + 1));
 
@@ -174,9 +174,14 @@ void AuthSession::Start()
 
 bool AuthSession::Update()
 {
+    // NetworkThread 里面每 1ms 更新一次
+
+    // 刷新写队列
     if (!AuthSocket::Update())
         return false;
 
+    // 每次更新的时候处理已经执行 mysql 的 compete handler；即通过 AddCallBack 执行完毕的
+    // 处理写的过程则散布在一个个的mysql complete handler里面
     _queryProcessor.ProcessReadyCallbacks();
 
     return true;
@@ -207,30 +212,41 @@ void AuthSession::CheckIpCallback(PreparedQueryResult result)
         }
     }
 
+    // IP 校验没问题，则开始异步读流程
+    // 初始状态下的 _status 是 STATUS_CHALLENGED，也就意味着我们要求客户端第一个发送过来的包是这个
     AsyncRead();
 }
 
 void AuthSession::ReadHandler()
 {
     MessageBuffer& packet = GetReadBuffer();
+
+    // 获取还未读完的内存段
     while (packet.GetActiveSize())
     {
+        // 客户端写入的数据第一个 byte 代表 cmd
         uint8 cmd = packet.GetReadPointer()[0];
+
         auto itr = Handlers.find(cmd);
         if (itr == Handlers.end())
         {
+            // 重置读写指针，而不是初始化整块内存，这样会更快一点
             // well we dont handle this, lets just ignore it
             packet.Reset();
             break;
         }
 
+        // 控制包发送逻辑序列的一个东西，即在什么时间点下应该发送什么样的包过来，否则认为是非法请求或者是客户端逻辑变了
         if (_status != itr->second.status)
         {
             CloseSocket();
             return;
         }
 
+        // 获取包头的大小
         uint16 size = uint16(itr->second.packetSize);
+
+        // 校验写入的数据长度是否合法
         if (packet.GetActiveSize() < size)
             break;
 
@@ -257,6 +273,7 @@ void AuthSession::ReadHandler()
         packet.ReadCompleted(size);
     }
 
+    // 重复异步读取流程
     AsyncRead();
 }
 
@@ -267,6 +284,8 @@ void AuthSession::SendPacket(ByteBuffer& packet)
 
     if (!packet.empty())
     {
+        // 将 packet 的内存拷贝到 MessageBufer
+        // 为什么？感觉第二次内存拷贝有点多余
         MessageBuffer buffer(packet.size());
         buffer.Write(packet.contents(), packet.size());
         QueuePacket(std::move(buffer));
@@ -284,6 +303,7 @@ bool AuthSession::HandleLogonChallenge()
     std::string login((char const*)challenge->I, challenge->I_len);
     TC_LOG_DEBUG("server.authserver", "[AuthChallenge] '{}'", login);
 
+    // 版本，系统等，由客户端发送
     _build = challenge->build;
     _expversion = uint8(AuthHelper::IsPostBCAcceptedClientBuild(_build) ? POST_BC_EXP_FLAG : (AuthHelper::IsPreBCAcceptedClientBuild(_build) ? PRE_BC_EXP_FLAG : NO_VALID_EXP_FLAG));
     std::array<char, 5> os;
@@ -311,6 +331,8 @@ bool AuthSession::HandleLogonChallenge()
 
 void AuthSession::LogonChallengeCallback(PreparedQueryResult result)
 {
+    // 初始化玩家的一些杂乱的登录信息，并将其作为成员变量初始化
+
     ByteBuffer pkt;
     pkt << uint8(AUTH_LOGON_CHALLENGE);
     pkt << uint8(0x00);
@@ -450,6 +472,8 @@ void AuthSession::LogonChallengeCallback(PreparedQueryResult result)
 // Logon Proof command handler
 bool AuthSession::HandleLogonProof()
 {
+    // 继续账户验证逻辑，密码，加密之类的
+
     TC_LOG_DEBUG("server.authserver", "Entering _HandleLogonProof");
     _status = STATUS_CLOSED;
 
@@ -722,6 +746,8 @@ bool AuthSession::HandleReconnectProof()
 
 bool AuthSession::HandleRealmList()
 {
+    // 账户验证通过了，开始获取服务器列表
+
     TC_LOG_DEBUG("server.authserver", "Entering _HandleRealmList");
 
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_REALM_CHARACTER_COUNTS);

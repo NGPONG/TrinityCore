@@ -1993,6 +1993,31 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
 
 uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo, TimePoint now) const
 {
+    // 获取光环的触发规则：通过GetSpellProcEntry获取当前光环的触发规则。如果没有对应的规则（即光环不是基于事件触发的），则直接返回0，表示没有效果被触发。
+    //
+    // 检查触发事件的法术：如果事件是由某个法术触发的，函数会进行多项检查，比如：
+    //
+    // 该法术是否由光环自身触发（防止自我触发循环）。
+    // 检查光环是否可以在该法术被触发时也触发。
+    // 如果触发的法术来自某个物品，还会检查光环是否允许从物品施放的法术触发。
+    // 检查隐身不被打破：如果光环具有使施法者隐身的效果，会检查触发事件的法术是否有不打破隐身的属性。
+    //
+    // 检查光环的使用次数：如果光环是基于使用次数的，检查剩余次数是否足够。
+    //
+    // 检查触发冷却时间：如果光环有冷却时间，检查是否处于冷却状态。
+    //
+    // 数据库检查：使用SpellMgr::CanSpellTriggerProcOnEvent函数检查基于数据库的条件是否满足。
+    //
+    // 条件表检查：使用sConditionMgr检查是否满足特定条件。
+    //
+    // AuraScript钩子：执行自定义脚本的检查。
+    //
+    // 效果掩码处理：计算哪些具体的光环效果可以被触发。如果所有效果都不满足触发条件，返回0。
+    //
+    // 额外要求：检查是否有额外的触发要求，比如装备需求等。
+    //
+    // 触发概率：最后，如果所有检查都通过，还会根据设定的概率决定是否真正触发光环效果。
+
     SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(GetId());
     // only auras with spell proc entry can trigger proc
     if (!procEntry)

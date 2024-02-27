@@ -89,6 +89,8 @@ private:
 
     bool VerifyVersion(uint8 const* a, int32 aLength, Trinity::Crypto::SHA1::Digest const& versionProof, bool isReconnect);
 
+    // 把客户端的一些信息都作为 AuthSession 的成员变量记录在这了
+
     Optional<Trinity::Crypto::SRP6> _srp6;
     SessionKey _sessionKey = {};
     std::array<uint8, 16> _reconnectProof = {};

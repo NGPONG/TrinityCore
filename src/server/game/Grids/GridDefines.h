@@ -31,6 +31,14 @@ class GameObject;
 class Pet;
 class Player;
 
+// 一张地图由一个一个的 GRID 构成，这里有 64 个 GRID
+//
+// 每个 GRID 里面由 CELL 构成，这里一个 GRID 里面有 8 个 CELL
+//
+// 一个 GRID 的大小为 533.3333f，一张地图的大小则为 64 * 533.3333f
+//
+// 一个 CELL 的大小为 533.3333f / 8
+
 #define MAX_NUMBER_OF_CELLS     8
 
 #define MAX_NUMBER_OF_GRIDS      64
@@ -54,6 +62,10 @@ class Player;
 
 #define MAP_SIZE                (SIZE_OF_GRIDS*MAX_NUMBER_OF_GRIDS)
 #define MAP_HALFSIZE            (MAP_SIZE/2)
+
+// AllWorldObjectTypes     = TypeList<Player, TypeList<Creature, TypeList<Corpse, TypeList<DynamicObject, TypeNull>>>>
+// AllGridObjectTypes      = TypeList<GameObject, TypeList<Creature, TypeList<DynamicObject, TypeList<Corpse, TypeNull>>>>
+// AllMapStoredObjectTypes = TypeList<Creature, TypeList<GameObject, TypeList<DynamicObject, TypeList<Pet, TypeList<Corpse, TypeNull>>>>>
 
 // Creature used instead pet to simplify *::Visit templates (not required duplicate code for Creature->Pet case)
 typedef TYPELIST_4(Player, Creature/*pets*/, Corpse/*resurrectable*/, DynamicObject/*farsight target*/) AllWorldObjectTypes;

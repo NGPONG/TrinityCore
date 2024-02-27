@@ -85,11 +85,13 @@ public:
 
     void balance()
     {
+        // unbalanced_times 每次执行插入或删除都会自增
+
         if (unbalanced_times == 0)
             return;
 
         unbalanced_times = 0;
-        m_objects.fastClear();
+        m_objects.fastClear(); // fastClear 可能是一种只是改变有效指针的形式，放弃析构
         m_obj2Idx.getKeys(m_objects);
         m_objects_to_push.getMembers(m_objects);
         //assert that m_obj2Idx has all the keys

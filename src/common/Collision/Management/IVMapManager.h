@@ -102,7 +102,7 @@ namespace VMAP
             virtual bool processCommand(char *pCommand)= 0;
 
             /**
-            Enable/disable LOS calculation
+            Enable/disable LOS(Line of Sight: https://wow.allakhazam.com/wiki/LoS_%28WoW%29) calculation
             It is enabled by default. If it is enabled in mid game the maps have to loaded manualy
             */
             void setEnableLineOfSightCalc(bool pVal) { iEnableLineOfSightCalc = pVal; }

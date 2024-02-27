@@ -86,11 +86,16 @@ int main(int argc, char** argv)
     Trinity::Impl::CurrentServerProcessHolder::_type = SERVER_PROCESS_AUTHSERVER;
     signal(SIGABRT, &Trinity::AbortHandler);
 
+    // windows 系统下的一些检查
     Trinity::VerifyOsVersion();
 
+    // 初始化多语言的环境
     Trinity::Locale::Init();
 
-    auto configFile = fs::absolute(_TRINITY_REALM_CONFIG);
+    // 创建配置文件对象
+    auto configFile = fs::absolute(_TRINITY_REALM_CONFIG); // _TRINITY_REALM_CONFIG = "${CONF_DIR}/authserver.conf"
+
+    // 处理命令行参数
     std::string configService;
     auto vm = GetConsoleArguments(argc, argv, configFile, configService);
     // exit if help or version is enabled
@@ -108,18 +113,25 @@ int main(int argc, char** argv)
 
     std::string configError;
     if (!sConfigMgr->LoadInitial(configFile.generic_string(),
-                                 std::vector<std::string>(argv, argv + argc),
+                                 std::vector<std::string>(argv, argv + argc), // 起始参数和结束参数
                                  configError))
     {
         printf("Error in config file: %s\n", configError.c_str());
         return 1;
     }
 
+    // 配置可以被环境变量覆盖，具体参考 IniKeyToEnvVarKey 函数
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
+    // log system 默认初始化 AppenderConsole 和 AppenderFile，authserver 追加一个 AppenderDB
     sLog->RegisterAppender<AppenderDB>();
+
+    // 通过配置(Appender.<name>)去初始化所有注册的Appender
+    // RegisterAppender 是一个模板函数，其能够将输入实参的默认构造作为函数指针封装进 AppenderFactory 中，然后
+    // 再 ReadAppendersFromConfig 的过程中会依据配置来完成对于这些注册的 Appender 的实例化
     sLog->Initialize(nullptr);
 
+    // 面板内容展示
     Trinity::Banner::Show("authserver",
         [](char const* text)
         {
@@ -133,13 +145,17 @@ int main(int argc, char** argv)
         }
     );
 
+    // 被覆盖的 config key 为用户提示警告
     for (std::string const& key : overriddenKeys)
         TC_LOG_INFO("server.authserver", "Configuration field '{}' was overridden with environment variable.", key);
 
+    // 初始化 openssl
     OpenSSLCrypto::threadsSetup(boost::dll::program_location().remove_filename());
 
+    // scope_guard 释放 openssl
     std::shared_ptr<void> opensslHandle(nullptr, [](void*) { OpenSSLCrypto::threadsCleanup(); });
 
+    // 如果配置了 PidFile 则将进程的 PID 写入文件当中
     // authserver PID file creation
     std::string pidFile = sConfigMgr->GetStringDefault("PidFile", "");
     if (!pidFile.empty())
@@ -153,22 +169,28 @@ int main(int argc, char** argv)
         }
     }
 
+    // 开启数据库
     // Initialize the database connection
     if (!StartDB())
         return 1;
 
+    // TOTP加密算法相关的初始化，默认没有设置
     sSecretMgr->Initialize();
 
+    // 设置IP信息
     // Load IP Location Database
     sIPLocation->Load();
 
+    // RAII close db connections
     std::shared_ptr<void> dbHandle(nullptr, [](void*) { StopDB(); });
 
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
 
+    // 初始化 RealmList 中的数据，并设置计时器定时更新
     // Get the list of realms for the server
     sRealmList->Initialize(*ioContext, sConfigMgr->GetIntDefault("RealmsStateUpdateDelay", 20));
 
+    // RAII close realmlist updater clock
     std::shared_ptr<void> sRealmListHandle(nullptr, [](void*) { sRealmList->Close(); });
 
     if (sRealmList->GetRealms().empty())
@@ -211,6 +233,7 @@ int main(int argc, char** argv)
     dbPingTimer->expires_from_now(boost::posix_time::minutes(dbPingInterval));
     dbPingTimer->async_wait(std::bind(&KeepDatabaseAliveHandler, std::weak_ptr<Trinity::Asio::DeadlineTimer>(dbPingTimer), dbPingInterval, std::placeholders::_1));
 
+    // 定期清理过期的ban账号
     int32 banExpiryCheckInterval = sConfigMgr->GetIntDefault("BanExpiryCheckInterval", 60);
     std::shared_ptr<Trinity::Asio::DeadlineTimer> banExpiryCheckTimer = std::make_shared<Trinity::Asio::DeadlineTimer>(*ioContext);
     banExpiryCheckTimer->expires_from_now(boost::posix_time::seconds(banExpiryCheckInterval));
@@ -245,15 +268,20 @@ int main(int argc, char** argv)
 /// Initialize connection to the database
 bool StartDB()
 {
+    // 初始化 libmysqldev 库
     MySQL::Library_Init();
 
+    // TODO: Updates.EnableDatabases 设置为了 flase，这个配置是做什么的？
+    //
     // Load databases
     // NOTE: While authserver is singlethreaded you should keep synch_threads == 1.
     // Increasing it is just silly since only 1 will be used ever.
     DatabaseLoader loader("server.authserver", DatabaseLoader::DATABASE_NONE);
+    // 为 DatabaseLoader 的 _open, _close 等添加 DatabaseWorkerPool 初始化逻辑
     loader
         .AddDatabase(LoginDatabase, "Login");
 
+    // 执行上一步添加的逻辑
     if (!loader.Load())
         return false;
 
@@ -327,7 +355,7 @@ void ServiceStatusWatcher(std::weak_ptr<Trinity::Asio::DeadlineTimer> serviceSta
 
 variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, std::string& configService)
 {
-    options_description all("Allowed options");
+    boost::program_options::options_description all("Allowed options");
     all.add_options()
         ("help,h", "print usage message")
         ("version,v", "print version build info")
@@ -342,13 +370,17 @@ variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, s
 
     all.add(win);
 #else
+    // 这是干啥的？
     (void)configService;
 #endif
-    variables_map variablesMap;
+    boost::program_options::variables_map variablesMap;
     try
     {
-        store(command_line_parser(argc, argv).options(all).allow_unregistered().run(), variablesMap);
-        notify(variablesMap);
+        boost::program_options::store(
+            boost::program_options::command_line_parser(argc, argv).options(all).allow_unregistered().run(),
+            variablesMap
+        );
+        boost::program_options::notify(variablesMap);
     }
     catch (std::exception& e)
     {

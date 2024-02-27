@@ -21,8 +21,10 @@
 #include "Define.h"
 #include "Duration.h"
 #include "Random.h"
+#include "Log.h"
 #include <map>
 #include <type_traits>
+#include <boost/stacktrace.hpp>
 
 class EventProcessor;
 

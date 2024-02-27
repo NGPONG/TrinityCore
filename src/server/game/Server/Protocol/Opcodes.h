@@ -23,6 +23,7 @@
 #define _OPCODES_H
 
 #include "Define.h"
+#include "magic_enum.hpp"
 #include <string>
 
 enum Opcodes : uint16
@@ -1337,7 +1338,15 @@ enum Opcodes : uint16
     SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT1         = 0x51C,
     SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT2         = 0x51D,
     SMSG_MULTIPLE_MOVES                             = 0x51E, // uncompressed version of SMSG_COMPRESSED_MOVES
-    NUM_MSG_TYPES                                   = 0x51F
+    NUM_MSG_TYPES                                   = 0x51F,
+    MAX
+};
+
+template <>
+struct magic_enum::customize::enum_range<Opcodes> {
+  static constexpr int min = 0;
+  static constexpr int max = Opcodes::MAX;
+  // (max - min) must be less than UINT16_MAX.
 };
 
 enum OpcodeMisc : uint16

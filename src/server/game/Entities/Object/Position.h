@@ -127,6 +127,11 @@ public:
 
     float GetAbsoluteAngle(float x, float y) const
     {
+        // NOTE:
+        // 设向量 OA = (m_positionX, m_positionY)，向量 OB = (x, y)，所以向量 AB = OB - OA
+        // 这里将得到的向量 OA 放入二元反正切函数中，该函数可用于求一个点(其实也就是向量)相较于x正向轴之间的角度是多少
+        //
+        // 下面的 NormalizeOrientation 用于处理一些负数的情况，并且需要保证角度不能超过 2Π，即 360°
         float dx = x - m_positionX;
         float dy = y - m_positionY;
         return NormalizeOrientation(std::atan2(dy, dx));

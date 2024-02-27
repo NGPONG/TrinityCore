@@ -17,6 +17,10 @@
 
 #include "DatabaseEnv.h"
 
+// 下面三个 DatabaseConnection 作为 MySQLConnection 的派生，重写了其 DoPrepareStatements 函数
+
+// DatabaseWorkerPool 作为 MySqlConnection 的包装，为什么？
+
 DatabaseWorkerPool<WorldDatabaseConnection> WorldDatabase;
 DatabaseWorkerPool<CharacterDatabaseConnection> CharacterDatabase;
 DatabaseWorkerPool<LoginDatabaseConnection> LoginDatabase;

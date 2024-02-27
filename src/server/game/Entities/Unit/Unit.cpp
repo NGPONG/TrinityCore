@@ -481,7 +481,10 @@ void Unit::Update(uint32 p_time)
         ModifyAuraState(AURA_STATE_HEALTH_ABOVE_75_PERCENT, HealthAbovePct(75));
     }
 
+    // tick 样条移动，作为玩家的情况下默认情况下是不会设置移动曲线的，除非说类似于组队跟随的功能？
+    // 作为小怪来说其会设置移动曲线(MoveSplineInit::Launch)，然后在每次 tick 的时候会通过下面的函数去更新(最终会调用至 MoveSpline::_updateState)
     UpdateSplineMovement(p_time);
+
     i_motionMaster->Update(p_time);
 
     // Wait with the aura interrupts until we have updated our movement generators and position
@@ -575,6 +578,8 @@ void Unit::UpdateSplinePosition()
 
 void Unit::InterruptMovementBasedAuras()
 {
+    // 依据上一次更新位置时是否改变了位置或朝向来打断一些光环的效果
+
     // TODO: Check if orientation transport offset changed instead of only global orientation
     if (_positionUpdateInfo.Turned)
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TURNING);
@@ -615,6 +620,7 @@ bool Unit::IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const
     if (!obj || !IsInMap(obj) || !InSamePhase(obj))
         return false;
 
+    // NOTE: 此处相当于利用向量的知识来计算两个点之间的距离，但是这里没有对结果进行开根号，是一种性能优化的考虑
     float dx = pos.GetPositionX() - obj->GetPositionX();
     float dy = pos.GetPositionY() - obj->GetPositionY();
     float dz = pos.GetPositionZ() - obj->GetPositionZ();
@@ -622,11 +628,24 @@ bool Unit::IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const
 
     float maxdist = GetMeleeRange(obj);
 
+    // NOTE:
+    //
+    // 1. 此处计算的距离并没有开根号，所以我们设它为: z = x^2，其中 x 为真实距离
+    // 2. 此处 maxdist 是实际计算出来的真实距离，我们设其为 y = maxdist
+    // 3. 由于 x^2 <= y^2 的情况下一定能证明 x <= y，所以为了避免开根号带来的性能消耗，所以这里 distq 并没有选择开根号进行运算
+
     return distsq <= maxdist * maxdist;
 }
 
 float Unit::GetMeleeRange(Unit const* target) const
 {
+    // NOTE:
+    // 1. GetCombatReach() + target->GetCombatReach():
+    //  * 计算总近战范围：将当前单位的战斗触达范围与目标单位的战斗触达范围相加，这样做的目的是考虑到两个单位之间在进行近战交战时可能的最大物理间隔。这个总和代表了两个单位在不移动的情况下可以相互攻击到的最远距离
+    // 2. + 4.0f / 3.0f:
+    //  * 可能是为了引入一个固定的缓冲距离，确保即使在计算的边缘情况下，单位也有足够的空间进行近战攻击
+    // 3. std::max(range, NOMINAL_MELEE_RANGE):
+    //  * 确保最终值不低于标准战斗范围
     float range = GetCombatReach() + target->GetCombatReach() + 4.0f / 3.0f;
     return std::max(range, NOMINAL_MELEE_RANGE);
 }
@@ -1436,12 +1455,15 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
     if (!canTakeMeleeDamage())
         return;
 
+    // 如果攻击被受害者招架，或者是被害者不会因招架而加速下一次攻击
     if (damageInfo->TargetState == VICTIMSTATE_PARRY &&
         (victim->GetTypeId() != TYPEID_UNIT || (victim->ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_PARRY_HASTEN) == 0))
     {
         // Get attack timers
         float offtime  = float(victim->getAttackTimer(OFF_ATTACK));
         float basetime = float(victim->getAttackTimer(BASE_ATTACK));
+
+        // 根据一些规则调整受害者下一次攻击的计时器，招架后可能会攻击的更快
         // Reduce attack time
         if (victim->haveOffhandWeapon() && offtime < basetime)
         {
@@ -1469,16 +1491,44 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
         }
     }
 
+    // 遍历所有伤害类型的一些逻辑
     for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
+        // 如果受害者能受到伤害
         if (!canTakeMeleeDamage() || (!damageInfo->Damages[i].Damage && !damageInfo->Damages[i].Absorb && !damageInfo->Damages[i].Resist))
             continue;
 
+        // NOTE: from chatgpt
+        // 1. 伤害处理前的准备工作
+        //  * AI反应：如果受害者或攻击者有AI，会通知AI伤害发生。
+        //  * 脚本钩子：通过OnDamage事件触发脚本中定义的自定义逻辑。
+        //  * 宠物反应：如果受害者有宠物，通知宠物它们的主人被攻击了。
+        //  * 上帝模式检查：如果受害者是玩家并开启了上帝模式，伤害将不会被应用。
+        // 2. 施加伤害
+        //  * 打断效果：伤害可能会打断某些需要集中的施法。
+        //  * 共享伤害：处理与SPELL_AURA_SHARE_DAMAGE_PCT相关的效果，将伤害部分转移到施法者身上。
+        //  * 怒气获取：如果攻击者使用怒气，基于造成的伤害和吸收的伤害计算获得的怒气值。
+        // 3. 实际伤害应用
+        //  * 伤害应用：伤害值从受害者的生命值中扣除。如果伤害足够将受害者的生命值减至0或以下，将执行击杀逻辑。
+        //  * 决斗逻辑：处理玩家之间决斗时的特殊情况，确保决斗结束时不会导致死亡。
+        //  * 成就更新：更新与造成伤害和接受伤害相关的成就。
+        //  * 战场和PvE得分：如果在战场中，更新玩家的伤害得分。
+        // 4. 攻击后处理
+        //  * 怒气从受伤中获取：如果受害者使用怒气，根据接受的伤害值获得怒气。
+        //  * 装备耐久度损失：有一定几率导致攻击者或受害者的装备耐久度下降。
+        //  * 打断集中施法：如果受害者正在施法，伤害可能会打断其施法或延迟施法完成的时间。
+        //  * 施法延迟：对于正在进行的引导或准备中的法术，伤害可能会导致施法延迟。
+        //  * 自动站立：如果受害者是玩家并且坐下，受到伤害会自动站立起来。
+        // 5. 特殊情况处理
+        //  * 宠物和控制的生物对伤害的反应：如果受害者是由玩家控制的生物，可能会根据受到的伤害调整其行为。
+        //  * 威胁值更新：更新攻击者对受害者的威胁值。
+        //  * 通过这个函数，游戏能够处理复杂的战斗动态，确保每次攻击都能按照预定规则正确计算伤害，同时处理众多的游戏机制，包括但不限于上述的逻辑点。
         // Call default DealDamage
         CleanDamage cleanDamage(damageInfo->CleanDamage, damageInfo->Damages[i].Absorb, damageInfo->AttackType, damageInfo->HitOutCome);
         Unit::DealDamage(this, victim, damageInfo->Damages[i].Damage, &cleanDamage, DIRECT_DAMAGE, SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask), nullptr, durabilityLoss);
     }
 
+    // 特殊攻击效果的一些逻辑
     // If this is a creature and it attacks from behind it has a probability to daze it's victim
     if ((damageInfo->HitOutCome == MELEE_HIT_CRIT || damageInfo->HitOutCome == MELEE_HIT_CRUSHING || damageInfo->HitOutCome == MELEE_HIT_NORMAL || damageInfo->HitOutCome == MELEE_HIT_GLANCING) &&
         GetTypeId() != TYPEID_PLAYER && !ToCreature()->IsControlledByPlayer() && !victim->HasInArc(float(M_PI), this)
@@ -1502,6 +1552,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
             CastSpell(victim, 1604 /*SPELL_DAZED*/, true);
     }
 
+    // 此处用于处理装备上的特效触发逻辑
     if (GetTypeId() == TYPEID_PLAYER)
     {
         DamageInfo dmgInfo(*damageInfo);
@@ -1511,6 +1562,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
     // Do effect if any damage done to target
     if (damageInfo->Damages[0].Damage + damageInfo->Damages[1].Damage)
     {
+        // 此处用于处理受害者身上有着一些护盾光环，当被攻击后需要更新护盾上的一些数值逻辑
         // We're going to call functions which can modify content of the list during iteration over it's elements
         // Let's copy the list so we can prevent iterator invalidation
         AuraEffectList vDamageShieldsCopy(victim->GetAuraEffectsByType(SPELL_AURA_DAMAGE_SHIELD));
@@ -2064,6 +2116,8 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 
 void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extra)
 {
+    // TC_LOG_INFO("ngpong", "Unit::AttackerStateUpdate: {}", boost::stacktrace::to_string(boost::stacktrace::stacktrace()));
+
     if (HasUnitFlag(UNIT_FLAG_PACIFIED))
         return;
 
@@ -2073,12 +2127,17 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
     if (!victim->IsAlive())
         return;
 
+    // 近战攻击的情况下，检测两点(玩家与受害者)之间是否有遮挡
     if ((attType == BASE_ATTACK || attType == OFF_ATTACK) && !IsWithinLOSInMap(victim))
         return;
 
+    // 判断目标是否参与战斗的一些检测和设置，也包括了PVP中的一些设置
     AtTargetAttacked(victim, true);
+
+    // 打断光环的
     RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_MELEE_ATTACK);
 
+    // TODO: 只处理近战战斗？
     if (attType != BASE_ATTACK && attType != OFF_ATTACK)
         return;                                             // ignore ranged case
 
@@ -2090,21 +2149,29 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
         m_currentSpells[CURRENT_MELEE_SPELL]->cast();
     else
     {
+        // 有一些攻击可能会重定向到其它的目标，这要依赖 victim 身上的光环而定
         // attack can be redirected to another target
         victim = GetMeleeHitRedirectTarget(victim);
 
+        // 根据一些公式计算伤害信息，这个信息处理数值外，还有伤害反馈，比如被招架或格挡了等等
         CalcDamageInfo damageInfo;
         CalculateMeleeDamage(victim, &damageInfo, attType);
         // Send log damage message to client
 
+        // 此步骤会再次修改 damageInfo
         for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             Unit::DealDamageMods(victim, damageInfo.Damages[i].Damage, &damageInfo.Damages[i].Absorb);
+
+        // 发送 SMSG_ATTACKERSTATEUPDATE 消息给玩家
         SendAttackStateUpdate(&damageInfo);
 
+        // 此处应该是用于处理一些法术效果生效时的关联索引
         _lastDamagedTargetGuid = victim->GetGUID();
 
+        // 此处逻辑处理各种复杂的数据更新，其中包含了玩家受伤逻辑也在里面
         DealMeleeDamage(&damageInfo, true);
 
+        // 根据攻击和受害者的状态触发自身相关的技能和光环效果
         DamageInfo dmgInfo(damageInfo);
         Unit::ProcSkillsAndAuras(damageInfo.Attacker, damageInfo.Target, damageInfo.ProcAttacker, damageInfo.ProcVictim, PROC_SPELL_TYPE_NONE, PROC_SPELL_PHASE_NONE, dmgInfo.GetHitMask(), nullptr, &dmgInfo, nullptr);
 
@@ -2948,6 +3015,7 @@ void Unit::SetCurrentCastSpell(Spell* pSpell)
     if (pSpell == m_currentSpells[CSpellType])             // avoid breaking self
         return;
 
+    // 通过调用InterruptSpell(CSpellType, false)来中断相同类型的当前施放法术，如果存在的话
     // break same type spell if it is not delayed
     InterruptSpell(CSpellType, false);
 
@@ -3027,6 +3095,7 @@ void Unit::InterruptSpell(CurrentSpellTypes spellType, bool withDelayed, bool wi
         if (!spell->IsInterruptable())
             return;
 
+        // 如果技能是可以自动重复的，则给玩家发送取消自动重复
         // send autorepeat cancel message for autorepeat spells
         if (spellType == CURRENT_AUTOREPEAT_SPELL)
             if (GetTypeId() == TYPEID_PLAYER)
@@ -5522,34 +5591,41 @@ Unit* Unit::getAttackerForHelper() const                 // If someone wants to 
 
 bool Unit::Attack(Unit* victim, bool meleeAttack)
 {
+    // 受害者有效性，不能是自己
     if (!victim || victim == this)
         return false;
 
+    // 继续检查，检查是否活着等等
     // dead units can neither attack nor be attacked
     if (!IsAlive() || !victim->IsInWorld() || !victim->IsAlive())
         return false;
 
+    // 检查玩家是否在上马状态？
     // player cannot attack in mount state
     if (GetTypeId() == TYPEID_PLAYER && IsMounted())
         return false;
 
+    // 如果当前 Object 是 creature 且处于闪避状态则返回
     Creature* creature = ToCreature();
     // creatures cannot attack while evading
     if (creature && creature->IsInEvadeMode())
         return false;
 
+    // 无法攻击 GM
     // nobody can attack GM in GM-mode
     if (victim->GetTypeId() == TYPEID_PLAYER)
     {
         if (victim->ToPlayer()->IsGameMaster())
             return false;
     }
+    // 如果是生物，则判断是否正在躲避攻击
     else
     {
         if (victim->ToCreature()->IsEvadingAttacks())
             return false;
     }
 
+    // 发起攻击的那一刻移除一些光环，比如一些攻击后就失效的光环
     // remove SPELL_AURA_MOD_UNATTACKABLE at attack (in case non-interruptible spells stun aura applied also that not let attack)
     if (HasAuraType(SPELL_AURA_MOD_UNATTACKABLE))
         RemoveAurasByType(SPELL_AURA_MOD_UNATTACKABLE);
@@ -5558,6 +5634,7 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
     {
         if (m_attacking == victim)
         {
+            // 如果正在攻击目标 victim，则根据目前发起的攻击类型去判断旧的攻击状态，并执行更新或清理；切换攻击状态
             // switch to melee attack from ranged/magic
             if (meleeAttack)
             {
@@ -5568,6 +5645,7 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
                     return true;
                 }
             }
+            // 表示此刻是远程攻击，应该是一个切换状态的逻辑，从远程切换到近战攻击的状态
             else if (HasUnitState(UNIT_STATE_MELEE_ATTACKING))
             {
                 ClearUnitState(UNIT_STATE_MELEE_ATTACKING);
@@ -5583,15 +5661,19 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
             ClearUnitState(UNIT_STATE_MELEE_ATTACKING);
     }
 
+    // 移除受害者的 Attacker 目标
     if (m_attacking)
         m_attacking->_removeAttacker(this);
 
+    // 添加受害者的 Attacker 目标
     m_attacking = victim;
     m_attacking->_addAttacker(this);
 
+    // 仅当 this 为 creature 派生类时才会存在实现
     // Set our target
     SetTarget(victim->GetGUID());
 
+    // 设置状态，近战攻击会设置
     if (meleeAttack)
         AddUnitState(UNIT_STATE_MELEE_ATTACKING);
 
@@ -5599,24 +5681,33 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
     //if (GetTypeId() == TYPEID_UNIT)
     //    ToCreature()->SetCombatStartPosition(GetPositionX(), GetPositionY(), GetPositionZ());
 
+    // 如果发起 Attack 的一方是生物且不由玩家所控制
     if (creature && !IsControlledByPlayer())
     {
+        // 设置威胁列表或进入攻击状态；还有包括一些设立 PVP or PVE 引用状态；通知AI开始执行逻辑?
         EngageWithTarget(victim); // ensure that anything we're attacking has threat
 
+        // 为生物周围的玩家发送AI反应消息，会牵扯(触发)一系列其他的逻辑
+        // 这里发送的是敌对状态，可能会触发一些进入战斗的音乐
         creature->SendAIReaction(AI_REACTION_HOSTILE);
+        // 生物呼叫支援
         creature->CallAssistance();
 
+        // 设置生物的表情状态
         // Remove emote state - will be restored on creature reset
         SetEmoteState(EMOTE_ONESHOT_NONE);
     }
 
+    // 延迟副手武器的攻击时间，需要保证主手武器先出手
     // delay offhand weapon attack by 50% of the base attack time
     if (haveOffhandWeapon() && GetTypeId() != TYPEID_PLAYER)
         setAttackTimer(OFF_ATTACK, std::max(getAttackTimer(OFF_ATTACK), getAttackTimer(BASE_ATTACK) + uint32(CalculatePct(GetFloatValue(UNIT_FIELD_BASEATTACKTIME), 50))));
 
+    // 近战武器则发送 SMSG_ATTACK_START 消息
     if (meleeAttack)
         SendMeleeAttackStart(victim);
 
+    // 应该是宠物相关的逻辑
     // Let the pet know we've started attacking someting. Handles melee attacks only
     // Spells such as auto-shot and others handled in WorldSession::HandleCastSpellOpcode
     if (GetTypeId() == TYPEID_PLAYER)
@@ -8277,8 +8368,11 @@ void Unit::EngageWithTarget(Unit* enemy)
     if (!enemy)
         return;
 
+    // NOTE: 威胁列表具体是做啥的？
+    // 检测当前 Object 是否启用了威胁列表，如果启用了则将敌人放入威胁列表内，应该是辅助一些 AI 执行的逻辑
     if (CanHaveThreatList())
         m_threatManager.AddThreat(enemy, 0.0f, nullptr, true, true);
+    // 与敌人进入战斗状态
     else
         SetInCombatWith(enemy);
 }
@@ -8766,17 +8860,23 @@ void Unit::AtExitCombat()
 
 void Unit::AtTargetAttacked(Unit* target, bool canInitialAggro)
 {
+    // 检查目标是否已参与战斗，这一步通过 CMSG_ATTACK_SWING 消息实现
     if (!target->IsEngaged() && !canInitialAggro)
         return;
+
+    // 似乎是目标没有参与战斗且条件符合的情况下(玩家正在攻击、距离满足、且没有其它额外的限制)，则设置参与战斗，也就是 CMSG_ATTACK_SWING 那边的逻辑
     target->EngageWithTarget(this);
+    // 同时设置目标的从属单位也参与战斗
     if (Unit* targetOwner = target->GetCharmerOrOwner())
         targetOwner->EngageWithTarget(this);
 
+    // 应该是设置战利品的一些代码补丁
     //Patch 3.0.8: All player spells which cause a creature to become aggressive to you will now also immediately cause the creature to be tapped.
     if (Creature* creature = target->ToCreature())
         if (!creature->hasLootRecipient() && GetTypeId() == TYPEID_PLAYER)
             creature->SetLootRecipient(this);
 
+    // 应该是进入PVP战斗的一些设置逻辑
     Player* myPlayerOwner = GetCharmerOrOwnerPlayerOrPlayerItself();
     Player* targetPlayerOwner = target->GetCharmerOrOwnerPlayerOrPlayerItself();
     if (myPlayerOwner && targetPlayerOwner && !(myPlayerOwner->duel && myPlayerOwner->duel->Opponent == targetPlayerOwner))
@@ -9349,6 +9449,7 @@ void Unit::SetHealth(uint32 val)
 
     SetUInt32Value(UNIT_FIELD_HEALTH, val);
 
+    // 关于一些组队的更新，其中也包括宠物的
     // group update
     if (Player* player = ToPlayer())
     {
@@ -10045,13 +10146,17 @@ uint32 createProcHitMask(SpellNonMeleeDamage* damageInfo, SpellMissInfo missCond
 
 void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMask, uint32 hitMask, WeaponAttackType attType)
 {
+    // 处理各种战斗事件（如攻击、防御）时的技能和反应式行为更新，根据战斗中发生的事件动态地更新单位的技能和状态
+
     // Player is loaded now - do not allow passive spell casts to proc
     if (GetTypeId() == TYPEID_PLAYER && ToPlayer()->GetSession()->PlayerLoading())
         return;
 
+    // 检查是否为近战或远程攻击触发，并且存在目标单位
     // For melee/ranged based attack need update skills and set some Aura states if victim present
     if (typeMask & MELEE_BASED_TRIGGER_MASK && procTarget)
     {
+        // 仅更新当前为玩家且目标是生物？
         // Update skills here for players
         // only when you are not fighting other players or their pets/totems (pvp)
         if (GetTypeId() == TYPEID_PLAYER &&
@@ -10060,6 +10165,7 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
                 !procTarget->IsPet()
            )
         {
+            // 根据攻击的结果（命中、未命中、完全抵抗）更新玩家的战斗技能。这个过程可能涉及到增加玩家的攻击技能水平或是其他相关的技能
             // On melee based hit/miss/resist need update skill (for victim and attacker)
             if (hitMask & (PROC_HIT_NORMAL | PROC_HIT_MISS | PROC_HIT_FULL_RESIST))
             {
@@ -12196,7 +12302,9 @@ void Unit::UpdateObjectVisibility(bool forced)
         AddToNotify(NOTIFY_VISIBILITY_CHANGED);
     else
     {
+        // 此处涉及到维护 m_clientGUIDs 成员的修改，因为 A 可以被 B 看见了，还维护了一些宠物移除逻辑等
         WorldObject::UpdateObjectVisibility(true);
+        // 此处涉及到一些生物AI执行相关的，比如进入了某些生物的视野后会触发生物的AI执行逻辑
         // call MoveInLineOfSight for nearby creatures
         Trinity::AIRelocationNotifier notifier(*this);
         Cell::VisitAllObjects(this, notifier, GetVisibilityRange());
@@ -12909,15 +13017,18 @@ bool Unit::UpdatePosition(float x, float y, float z, float orientation, bool tel
         return false;
     }
 
+    // 检测是否朝向发生改变，计算当前朝向与目标朝向之间的角度差，如果角度差大于 0，则表示朝向发生了变化
     // Check if angular distance changed
     bool const turn = G3D::fuzzyGt(M_PI - fabs(fabs(GetOrientation() - orientation) - M_PI), 0.0f);
 
+    // 计算是否发生了位置变化，即新的位置与旧位置的差 > 0.001
     // G3D::fuzzyEq won't help here, in some cases magnitudes differ by a little more than G3D::eps, but should be considered equal
     bool const relocated = (teleport ||
         std::fabs(GetPositionX() - x) > 0.001f ||
         std::fabs(GetPositionY() - y) > 0.001f ||
         std::fabs(GetPositionZ() - z) > 0.001f);
 
+    // 更新位置数据
     if (relocated)
     {
         // move and update visible state if need
@@ -12926,11 +13037,14 @@ bool Unit::UpdatePosition(float x, float y, float z, float orientation, bool tel
         else
             GetMap()->CreatureRelocation(ToCreature(), x, y, z, orientation);
     }
+    // 更新朝向数据
     else if (turn)
         UpdateOrientation(orientation);
 
+    // 更新一些地形数据，比如是否再室外，高度等等
     UpdatePositionData();
 
+    // 缓存单词更新位置的结果，以处理 Unit::InterruptMovementBasedAuras 逻辑
     _positionUpdateInfo.Relocated = relocated;
     _positionUpdateInfo.Turned = turn;
 

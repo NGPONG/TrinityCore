@@ -24,6 +24,7 @@
 #include "Position.h"
 #include "SharedDefines.h"
 #include "SpellDefines.h"
+#include "Log.h"
 #include <memory>
 
 namespace WorldPackets

@@ -189,6 +189,7 @@ public:
 
     void ReleaseContext(std::string const& context) final override
     {
+        // SwapContext 的调用会先调用到 SpecializedScriptRegistry，移除掉相符 context 的 _scripts
         for (auto const registry : _registries)
             registry->ReleaseContext(context);
 
@@ -205,6 +206,8 @@ public:
 
     void SwapContext(bool initialize) final override
     {
+        // SwapContext 的调用会先调用到 SpecializedScriptRegistry
+        // 然后 SpecializedScriptRegistry 内部的 SwapContext 又会调用 BeforeSwapContext，且根据模板形参的不同而不同
         for (auto const registry : _registries)
             registry->SwapContext(initialize);
 
@@ -242,11 +245,13 @@ public:
 private:
     void Register(ScriptRegistryInterface* registry)
     {
+        // 该函数在调用 ScriptRegistry<Script_Module>::Instance() 时会被调用
         _registries.insert(registry);
     }
 
     void DoDelayedDelete()
     {
+        // _delayed_delete_queue 在 AddScript 出现重复的时候会才会添加，一般情况下应该不用管
         _delayed_delete_queue.clear();
     }
 
@@ -492,6 +497,7 @@ class CreatureGameObjectScriptRegistrySwapHooks
 
     static void DestroyScriptIdsFromSet(std::unordered_set<uint32> const& idsToRemove)
     {
+        // 遍历所有地图
         // First reset all swapped scripts safe by guid
         // Skip creatures and gameobjects with an empty guid
         // (that were not added to the world as of now)
@@ -499,6 +505,7 @@ class CreatureGameObjectScriptRegistrySwapHooks
         {
             std::vector<ObjectGuid> guidsToReset;
 
+            // 遍历地图中的所有对象，找到 scriptId 相符的对象并执行下面的 lambda
             VisitObjectsToSwapOnMap(map, idsToRemove, [&](ObjectType* object)
             {
                 if (object->AI() && !object->GetGUID().IsEmpty())
@@ -565,11 +572,14 @@ public:
         if (initialize)
             return;
 
+        // _recently_added_ids 在 AddScript 成功后会添加
+        //
         // Add the recently added scripts to the deleted scripts to replace
         // default AI's with recently added core scripts.
         ids_removed_.insert(static_cast<Base*>(this)->GetRecentlyAddedScriptIDs().begin(),
                             static_cast<Base*>(this)->GetRecentlyAddedScriptIDs().end());
 
+        // 用于 script 被 swap 了，所以重新初始化地图内与当前 script 绑定的 object
         DestroyScriptIdsFromSet(ids_removed_);
         InitializeScriptIdsFromSet(ids_removed_);
 
@@ -851,6 +861,7 @@ protected:
 
     std::unordered_set<uint32> const& GetRecentlyAddedScriptIDs() const
     {
+        // 此成员在 AddScripts 成功后会添加
         return _recently_added_ids;
     }
 
@@ -964,6 +975,7 @@ private:
 #define SCR_REG_ITR(T) ScriptRegistry<T>::ScriptStoreIteratorType
 #define SCR_REG_LST(T) ScriptRegistry<T>::Instance()->GetScripts()
 
+// 遍历这玩意: ScriptRegistry<T>::Instance()->GetScripts()
 // Utility macros for looping over scripts.
 #define FOR_SCRIPTS(T, C, E) \
     if (!SCR_REG_LST(T).empty()) \
@@ -1028,36 +1040,46 @@ ScriptMgr* ScriptMgr::instance()
 
 void ScriptMgr::Initialize()
 {
+    // 如果存在某些 spell 的话则不给初始化
     ASSERT(sSpellMgr->GetSpellInfo(SPELL_HOTSWAP_VISUAL_SPELL_EFFECT)
            && "Reload hotswap spell effect for creatures isn't valid!");
 
     uint32 oldMSTime = getMSTime();
 
+    // 从 db 中初始化 SystemMgr::_waypointStore, SystemMgr::m_mSplineChainsMap 成员
     LoadDatabase();
 
     TC_LOG_INFO("server.loading", "Loading C++ scripts");
 
+    // 依据 SpellInfo 初始化 ScriptMgr.cpp::SpellSummary, CreatureAI.cpp::AISpellInfo 成员(缓存)
     FillSpellSummary();
 
     // Load core scripts
+
+    // 初始化 _currentContext 成员
     SetScriptContext(GetNameOfStaticContext());
 
+    // 为什么要在这里初始化？而不是像其它 src/server/scripts/<script_dir> 初始化的方式？
     // SmartAI
     AddSC_SmartScripts();
 
+    // 同上的疑问
     // LFGScripts
     lfg::AddSC_LFGScripts();
 
+    // 该成员在 main 函数里面设置了，这里就开始加载 src/server/scripts/<script_dir> 中的各种 scripts
     // Load all static linked scripts through the script loader function.
     ASSERT(_script_loader_callback,
            "Script loader callback wasn't registered!");
     _script_loader_callback();
 
+    // 如果启用了 BUILD_SHARED_LIBS 选项，则 sScriptReloadMgr 返回 HotSwapScriptReloadMgr 的派生实现
     // Initialize all dynamic scripts
     // and finishes the context switch to do
     // bulk loading
     sScriptReloadMgr->Initialize();
 
+    // 此处 Swap 的过程中会清理掉 _recently_added_ids，但是没看到做其它有意义的事
     // Loads all scripts from the current context
     sScriptMgr->SwapScriptContext(true);
 
@@ -1066,9 +1088,11 @@ void ScriptMgr::Initialize()
         sObjectMgr->GetAllScriptNames().begin(),
         sObjectMgr->GetAllScriptNames().end());
 
+    // 依据 DB 查询的内容，移除掉代码库中不使用的 scripts
     // Remove the used scripts from the given container.
     sScriptRegistryCompositum->RemoveUsedScriptsFromContainer(unusedScriptNames);
 
+    // prompt to user
     for (std::string const& scriptName : unusedScriptNames)
     {
         // Avoid complaining about empty script names since the
@@ -1130,7 +1154,10 @@ void ScriptMgr::Unload()
 
 void ScriptMgr::LoadDatabase()
 {
+    // 从 db 中初始化 _waypointStore 成员
     sScriptSystemMgr->LoadScriptWaypoints();
+
+    // 从 db 中初始化 m_mSplineChainsMap 成员
     sScriptSystemMgr->LoadScriptSplineChains();
 }
 
@@ -1231,14 +1258,17 @@ void CreateSpellOrAuraScripts(uint32 spellId, std::vector<T*>& scriptVector, F&&
         if (!itr->second.second)
             continue;
 
+        // 一切 spell 的 scripts 都继承自 SpellScriptLoader
         SpellScriptLoader* tmpscript = sScriptMgr->GetSpellScriptLoader(itr->second.first);
         if (!tmpscript)
             continue;
 
+        // 获取派生类的 extractor 函数的 override
         T* script = (*tmpscript.*extractor)();
         if (!script)
             continue;
 
+        // _Init 和 _Load 函数来自script的基类SpellScript
         script->_Init(&tmpscript->GetName(), spellId);
         if (!script->_Load(objectInvoker))
         {
@@ -1398,14 +1428,17 @@ void ScriptMgr::OnCreateMap(Map* map)
 {
     ASSERT(map);
 
+    // 默认情况下没有 WorldMapScript
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnCreate(map);
     SCR_MAP_END;
 
+    // 这个挺多注册的，在 scripts/EasternKingdoms 目录下，但是没有 script 实现了 OnCreate 回调
     SCR_MAP_BGN(InstanceMapScript, map, itr, end, entry, IsDungeon);
         itr->second->OnCreate((InstanceMap*)map);
     SCR_MAP_END;
 
+    // 默认情况下没有 BattlegroundMapScript
     SCR_MAP_BGN(BattlegroundMapScript, map, itr, end, entry, IsBattleground);
         itr->second->OnCreate((BattlegroundMap*)map);
     SCR_MAP_END;
@@ -2174,6 +2207,7 @@ void ServerScript::OnPacketReceive(WorldSession* /*session*/, WorldPacket& /*pac
 {
 }
 
+// 未找到调用的地方
 WorldScript::WorldScript(char const* name)
     : ScriptObject(name)
 {
@@ -2286,6 +2320,7 @@ template class TC_GAME_API MapScript<Map>;
 template class TC_GAME_API MapScript<InstanceMap>;
 template class TC_GAME_API MapScript<BattlegroundMap>;
 
+// 未找到调用的地方
 WorldMapScript::WorldMapScript(char const* name, uint32 mapId)
     : ScriptObject(name), MapScript(sMapStore.LookupEntry(mapId))
 {
@@ -2811,6 +2846,7 @@ void GroupScript::OnDisband(Group* /*group*/)
 {
 }
 
+// Explicit instantiation 以减少编译时间，并且限制使用
 // Specialize for each script type class like so:
 template class TC_GAME_API ScriptRegistry<SpellScriptLoader>;
 template class TC_GAME_API ScriptRegistry<ServerScript>;

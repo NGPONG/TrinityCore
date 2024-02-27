@@ -51,6 +51,7 @@ G3D::Vector3 TranslateLocation(G3D::Vector4 const* DBCPosition, G3D::Vector3 con
 bool readCamera(M2Camera const* cam, uint32 buffSize, M2Header const* header, CinematicCameraEntry const* dbcentry)
 {
     char const* buffer = reinterpret_cast<char const*>(header);
+    // bufferSize 是 buffer 的 size，也是 m2 文件的总大小
 
     FlyByCameraCollection cameras;
     FlyByCameraCollection targetcam;
@@ -59,6 +60,8 @@ bool readCamera(M2Camera const* cam, uint32 buffSize, M2Header const* header, Ci
     DBCData.x = dbcentry->Origin.X;
     DBCData.y = dbcentry->Origin.Y;
     DBCData.z = dbcentry->Origin.Z;
+    // w 是第四坐标系: 齐次顶点
+    // 这里似乎是给的方向(朝向)？
     DBCData.w = dbcentry->OriginFacing;
 
     // Read target locations, only so that we can calculate orientation
@@ -68,9 +71,13 @@ bool readCamera(M2Camera const* cam, uint32 buffSize, M2Header const* header, Ci
         if (cam->target_positions.timestamps.offset_elements + sizeof(M2Array) > buffSize)
             return false;
         M2Array const* targTsArray = reinterpret_cast<M2Array const*>(buffer + cam->target_positions.timestamps.offset_elements);
-        if (targTsArray->offset_elements + sizeof(uint32) > buffSize || cam->target_positions.values.offset_elements + sizeof(M2Array) > buffSize)
+
+        if (targTsArray->offset_elements + sizeof(uint32) > buffSize)
             return false;
         uint32 const* targTimestamps = reinterpret_cast<uint32 const*>(buffer + targTsArray->offset_elements);
+
+        if (cam->target_positions.values.offset_elements + sizeof(M2Array) > buffSize)
+            return false;
         M2Array const* targArray = reinterpret_cast<M2Array const*>(buffer + cam->target_positions.values.offset_elements);
 
         if (targArray->offset_elements + sizeof(M2SplineKey<G3D::Vector3>) > buffSize)
@@ -190,6 +197,7 @@ void LoadM2Cameras(std::string const& dataPath)
         // Convert to native format
         filename.make_preferred();
 
+        // 原生的是 .mdx 文件？但是 TrinityCore 将其转换为了 .m2 文件，为什么？
         // Replace mdx to .m2
         filename.replace_extension("m2");
 
@@ -201,6 +209,7 @@ void LoadM2Cameras(std::string const& dataPath)
         m2file.seekg(0, std::ios::end);
         std::streamoff fileSize = m2file.tellg();
 
+        // 检查文件大小
         // Reject if not at least the size of the header
         if (static_cast<uint32>(fileSize) < sizeof(M2Header))
         {

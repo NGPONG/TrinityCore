@@ -3929,7 +3929,7 @@ AuctionHouseBot.Buyer.Recheck.Interval = 20
 #                         Example:  536870912 (512 MB)
 #
 
-Appender.Console=1,3,0
+Appender.Console=1,3,1
 Appender.Server=2,2,0,Server.log,w
 Appender.GM=2,2,1,GM.log
 Appender.DBErrors=2,2,0,DBErrors.log
@@ -3952,6 +3952,7 @@ Appender.DBErrors=2,2,0,DBErrors.log
 #                     (Using spaces as separator).
 #
 
+Logger.ngpong=3,Console
 Logger.root=5,Console Server
 Logger.server=3,Console Server
 Logger.commands.gm=3,Console GM

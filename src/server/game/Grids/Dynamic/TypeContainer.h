@@ -130,6 +130,7 @@ template <class OBJECT_TYPES>
 template <class SPECIFIC_TYPE>
 bool TypeMapContainer<OBJECT_TYPES>::insert(SPECIFIC_TYPE* obj)
 {
+    // SPECIFIC_TYPE = Player
     SPECIFIC_TYPE* t = Trinity::Insert(i_elements, obj);
     return (t != nullptr);
 }

@@ -62,6 +62,10 @@ typedef enum
     MAX_GRID_STATE = 4
 } grid_state_t;
 
+// N                  = 8
+// ACTIVE_OBJECT      = Player
+// WORLD_OBJECT_TYPES = TypeList<Player, TypeList<Creature, TypeList<Corpse, TypeList<DynamicObject, TypeNull>>>>
+// GRID_OBJECT_TYPES  = TypeList<GameObject, TypeList<Creature, TypeList<DynamicObject, TypeList<Corpse, TypeNull>>>>
 template
 <
 uint32 N,

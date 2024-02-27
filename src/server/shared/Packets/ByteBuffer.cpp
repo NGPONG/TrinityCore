@@ -96,6 +96,8 @@ void ByteBuffer::append(uint8 const* src, size_t cnt)
     ASSERT(size() < 10000000);
 
     size_t const newSize = _wpos + cnt;
+
+    // 内存不足则分配更多的内存
     if (_storage.capacity() < newSize) // custom memory allocation rules
     {
         if (newSize < 100)
@@ -107,9 +109,9 @@ void ByteBuffer::append(uint8 const* src, size_t cnt)
         else
             _storage.reserve(400000);
     }
-
     if (_storage.size() < newSize)
         _storage.resize(newSize);
+
     std::memcpy(&_storage[_wpos], src, cnt);
     _wpos = newSize;
 }

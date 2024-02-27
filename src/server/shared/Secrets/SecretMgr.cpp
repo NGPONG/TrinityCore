@@ -27,10 +27,16 @@
 #include <functional>
 #include <unordered_map>
 
+// key = DEFER_LOAD
+// val = 0x1
 #define SECRET_FLAG_FOR(key, val, server) server ## _ ## key = (val ## ull << (16*SERVER_PROCESS_ ## server))
 #define SECRET_FLAG(key, val) SECRET_FLAG_ ## key = val, SECRET_FLAG_FOR(key, val, AUTHSERVER), SECRET_FLAG_FOR(key, val, WORLDSERVER)
 enum SecretFlags : uint64
 {
+    // SECRET_FLAG_DEFER_LOAD = 0x1,
+    // AUTHSERVER_DEFER_LOAD = 0x1ull << (16 * SERVER_PROCESS_AUTHSERVER) = 0x1,
+    // WORLDSERVER_DEFER_LOAD = 0x1ull << (16 * SERVER_PROCESS_WORLDSERVER) = 0x1000,
+
     SECRET_FLAG(DEFER_LOAD, 0x1)
 };
 #undef SECRET_FLAG_FOR
@@ -48,6 +54,7 @@ struct SecretInfo
 
 static constexpr SecretInfo secret_info[NUM_SECRETS] =
 {
+    // configKey          oldKey                 bits owner                      _flags
     { "TOTPMasterSecret", "TOTPOldMasterSecret", 128, SERVER_PROCESS_AUTHSERVER, WORLDSERVER_DEFER_LOAD }
 };
 
@@ -85,8 +92,10 @@ static Optional<BigNumber> GetHexFromConfig(char const* configKey, int bits)
 
 void SecretMgr::Initialize()
 {
+    // NUM_SECRETS = 1
     for (uint32 i = 0; i < NUM_SECRETS; ++i)
     {
+        // WORLDSERVER 不执行，为什么？
         if (secret_info[i].flags() & SECRET_FLAG_DEFER_LOAD)
             continue;
         std::unique_lock<std::mutex> lock(_secrets[i].lock);
@@ -107,7 +116,11 @@ SecretMgr::Secret const& SecretMgr::GetSecret(Secrets i)
 
 void SecretMgr::AttemptLoad(Secrets i, LogLevel errorLevel, std::unique_lock<std::mutex> const&)
 {
+    // i = SECRET_TOTP_MASTER_KEY
+
     auto const& info = secret_info[i];
+
+    // 通过 stmt 查询旧的 digest
     Optional<std::string> oldDigest;
     {
         LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_SECRET_DIGEST);

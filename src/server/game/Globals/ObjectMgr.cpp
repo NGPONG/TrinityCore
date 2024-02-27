@@ -1804,6 +1804,7 @@ void ObjectMgr::LoadPlayerTotemModels()
             continue;
         }
 
+        // 做啥用的？
         ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(race);
         if (!raceEntry)
         {
@@ -2314,8 +2315,13 @@ void ObjectMgr::LoadCreatures()
             data.dynamicflags = 0;
         }
 
+        // 是否在加载的时候计算 zone/area ID
+        // CONFIG_CALCULATE_CREATURE_ZONE_AREA_DATA => Calculate.Creature.Zone.Area.Data
+        // TODO(wupeng): zone 和 area 相对于 map 来说是什么东西？
         if (sWorld->getBoolConfig(CONFIG_CALCULATE_CREATURE_ZONE_AREA_DATA))
         {
+            // 还不清楚这个 zoneId 和 areaId 是啥
+            // TODO(wupeng): 目前得到的信息就是计算这个 areaId 的时候需要用到一些碰撞的算法(计算视线？)
             uint32 zoneId = 0;
             uint32 areaId = 0;
             sMapMgr->GetZoneAndAreaId(data.phaseMask, zoneId, areaId, data.mapId, data.spawnPoint);
@@ -2768,6 +2774,10 @@ void ObjectMgr::LoadSpawnGroups()
                 TC_LOG_ERROR("sql.sql", "Spawn group {} has map ID {}, but spawn ({},{}) has map id {} - spawn NOT added to group!", groupId, groupTemplate.mapId, uint32(spawnType), spawnId, data->mapId);
                 continue;
             }
+            // 相当于是改变了
+            // SpawnData 的数据
+            // _spawnGroupMapStore 又存了 data 的数据
+
             const_cast<SpawnMetadata*>(data)->spawnGroupData = &groupTemplate;
             if (!(groupTemplate.flags & SPAWNGROUP_FLAG_SYSTEM))
                 _spawnGroupMapStore.emplace(groupId, data);
@@ -7442,6 +7452,7 @@ AreaTrigger const* ObjectMgr::GetMapEntranceTrigger(uint32 Map) const
 
 void ObjectMgr::SetHighestGuids()
 {
+    // 初始化 guid 生成器
     QueryResult result = CharacterDatabase.Query("SELECT MAX(guid) FROM characters");
     if (result)
         GetGuidSequenceGenerator(HighGuid::Player).Set((*result)[0].GetUInt32() + 1);
@@ -7450,6 +7461,7 @@ void ObjectMgr::SetHighestGuids()
     if (result)
         GetGuidSequenceGenerator(HighGuid::Item).Set((*result)[0].GetUInt32() + 1);
 
+    // 清理数据库中比最新的 guid 还新的数据
     // Cleanup other tables from nonexistent guids ( >= _hiItemGuid)
     CharacterDatabase.PExecute("DELETE FROM character_inventory WHERE item >= '{}'", GetGuidSequenceGenerator(HighGuid::Item).GetNextAfterMaxUsed());      // One-time query
     CharacterDatabase.PExecute("DELETE FROM mail_items WHERE item_guid >= '{}'", GetGuidSequenceGenerator(HighGuid::Item).GetNextAfterMaxUsed());          // One-time query

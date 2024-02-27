@@ -33,6 +33,8 @@ namespace AIRegistry
 {
     void Initialize()
     {
+        // 这些调用最终都会将将自身(具体来说是基类)(附带模板实参信息)封装进
+        // ObjectRegistry<FactoryHolder<CreatureAI, Creature, std::string>, std::string> 这个静态成员的 _registeredObjects 中
         (new CreatureAIFactory<NullCreatureAI>("NullCreatureAI"))->RegisterSelf();
         (new CreatureAIFactory<TriggerAI>("TriggerAI"))->RegisterSelf();
         (new CreatureAIFactory<AggressorAI>("AggressorAI"))->RegisterSelf();
@@ -49,10 +51,14 @@ namespace AIRegistry
         (new CreatureAIFactory<SmartAI>("SmartAI"))->RegisterSelf();
         (new CreatureAIFactory<ScheduledChangeAI, false>("ScheduledChangeAI"))->RegisterSelf();
 
+        // 这些调用最终都会将将自身(具体来说是基类)(附带模板实参信息)封装进
+        // ObjectRegistry<FactoryHolder<GameObjectAI, GameObject, std::string>, std::string> 这个静态成员的 _registeredObjects 中
         (new GameObjectAIFactory<NullGameObjectAI>("NullGameObjectAI"))->RegisterSelf();
         (new GameObjectAIFactory<GameObjectAI>("GameObjectAI"))->RegisterSelf();
         (new GameObjectAIFactory<SmartGameObjectAI>("SmartGameObjectAI"))->RegisterSelf();
 
+        // 这些调用最终都会将将自身(具体来说是基类)封装进
+        // ObjectRegistry<FactoryHolder<MovementGenerator, Unit, MovementGeneratorType>, MovementGeneratorType> 这个静态成员的 _registeredObjects 中
         (new IdleMovementFactory())->RegisterSelf();
         (new RandomMovementFactory())->RegisterSelf();
         (new WaypointMovementFactory())->RegisterSelf();

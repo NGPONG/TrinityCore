@@ -255,6 +255,7 @@ void PlayerDump::InitializeTables()
 {
     uint32 oldMSTime = getMSTime();
 
+    // 初始化 DumpTables 中的元素作为 TableStruct，并添加进 CharacterTables
     for (DumpTable const& dumpTable : DumpTables)
     {
         TableStruct t;
@@ -279,6 +280,7 @@ void PlayerDump::InitializeTables()
             t.TableFields.emplace_back(std::move(f));
         } while (result->NextRow());
 
+        // TODO(wupeng): WhereFieldName, IsDependentField, FieldGuidType 这三个字段是做什么的？
         switch (dumpTable.Type)
         {
             case DTT_CHARACTER:
@@ -371,6 +373,7 @@ void PlayerDump::InitializeTables()
         }
     }
 
+    // 给予 BaseTable 进行数据校验
     for (BaseTable const& baseTable : BaseTables)
         AssertBaseTable(baseTable);
 

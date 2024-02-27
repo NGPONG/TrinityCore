@@ -2743,36 +2743,35 @@ float GameObject::GetInteractionDistance() const
 {
     switch (GetGoType())
     {
-        case GAMEOBJECT_TYPE_AREADAMAGE:
+        case GAMEOBJECT_TYPE_AREADAMAGE: // 区域伤害类型的对象，通常不需要玩家直接交互
             return 0.0f;
-        case GAMEOBJECT_TYPE_QUESTGIVER:
-        case GAMEOBJECT_TYPE_TEXT:
-        case GAMEOBJECT_TYPE_FLAGSTAND:
-        case GAMEOBJECT_TYPE_FLAGDROP:
-        case GAMEOBJECT_TYPE_MINI_GAME:
+        case GAMEOBJECT_TYPE_QUESTGIVER: // 任务给予者，例如NPC或物品，玩家需要靠近以接受任务
+        case GAMEOBJECT_TYPE_TEXT: // 可交互的文本对象，如阅读标志或公告板
+        case GAMEOBJECT_TYPE_FLAGSTAND: // 旗帜架，如战场中的占点旗帜
+        case GAMEOBJECT_TYPE_FLAGDROP: // 旗帜掉落点，如战场中掉落敌方旗帜的位置
+        case GAMEOBJECT_TYPE_MINI_GAME: // 小游戏类型的对象，玩家需要靠近以参与
             return 5.5555553f;
-        case GAMEOBJECT_TYPE_BINDER:
+        case GAMEOBJECT_TYPE_BINDER: // 绑定器，如炉石绑定点
             return 10.0f;
-        case GAMEOBJECT_TYPE_CHAIR:
-        case GAMEOBJECT_TYPE_BARBER_CHAIR:
+        case GAMEOBJECT_TYPE_CHAIR: // 椅子，玩家可以坐下的对象
+        case GAMEOBJECT_TYPE_BARBER_CHAIR: // 理发椅，玩家可以更改外观的特殊椅子
             return 3.0f;
-        case GAMEOBJECT_TYPE_FISHINGNODE:
+        case GAMEOBJECT_TYPE_FISHINGNODE: // 钓鱼节点，玩家可以在此钓鱼
             return 100.0f;
-        case GAMEOBJECT_TYPE_FISHINGHOLE:
-            return 20.0f + CONTACT_DISTANCE; // max spell range
-        case GAMEOBJECT_TYPE_CAMERA:
-        case GAMEOBJECT_TYPE_MAP_OBJECT:
-        case GAMEOBJECT_TYPE_DUNGEON_DIFFICULTY:
-        case GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING:
-        case GAMEOBJECT_TYPE_DOOR:
+        case GAMEOBJECT_TYPE_FISHINGHOLE: // 钓鱼洞，特定的钓鱼点，通常距离更远
+            return 20.0f + CONTACT_DISTANCE; // max spell range + 联系距离
+        case GAMEOBJECT_TYPE_CAMERA: // 摄像机，用于特定视角或场景的展示
+        case GAMEOBJECT_TYPE_MAP_OBJECT: // 地图对象，用于展示地图上的特定点
+        case GAMEOBJECT_TYPE_DUNGEON_DIFFICULTY: // 地下城难度选择器
+        case GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING: // 可破坏建筑，如战场中的城墙或建筑
+        case GAMEOBJECT_TYPE_DOOR: // 门，玩家可以打开或关闭的门
             return 5.0f;
-        // Following values are not blizzlike
-        case GAMEOBJECT_TYPE_GUILD_BANK:
-        case GAMEOBJECT_TYPE_MAILBOX:
-            // Successful mailbox interaction is rather critical to the client, failing it will start a minute-long cooldown until the next mail query may be executed.
-            // And since movement info update is not sent with mailbox interaction query, server may find the player outside of interaction range. Thus we increase it.
-            return 10.0f; // 5.0f is blizzlike
-        default:
+        case GAMEOBJECT_TYPE_GUILD_BANK: // 公会银行，玩家可以存取公会物品
+        case GAMEOBJECT_TYPE_MAILBOX: // 邮箱，玩家可以接收或发送邮件
+            // 成功与邮箱交互对客户端来说相当关键，失败将启动长达一分钟的冷却时间，直到下一次邮件查询可以执行。
+            // 由于与邮箱交互查询不发送运动信息更新，服务器可能会发现玩家不在交互范围内。因此，我们增加了它。
+            return 10.0f; // 5.0f 是按照游戏原设计的
+        default: // 默认交互距离，适用于未特别指明的其他游戏对象类型
             return INTERACTION_DISTANCE;
     }
 }
@@ -2822,26 +2821,36 @@ std::string GameObject::GetDebugInfo() const
 
 bool GameObject::IsAtInteractDistance(Player const* player, SpellInfo const* spell) const
 {
+    // NOTE: 此函数用于判断玩家是否和游戏对象处于一个可交互性的范围内
+
+    // 如果传入了法术，则获取法术的 maxRange 来作为接下来调用时的 radius(交互距离)
     if (spell || (spell = GetSpellForLock(player)))
     {
         float maxRange = spell->GetMaxRange(spell->IsPositive());
 
+        // game object 对象为 GAMEOBJECT_TYPE_SPELL_FOCUS 时，则判断玩家与 game object 的距离是否小于 spell 配置的 maxRange
         if (GetGoType() == GAMEOBJECT_TYPE_SPELL_FOCUS)
             return maxRange * maxRange >= GetExactDistSq(player);
 
+        // 检查 game_obejct 是否有 displayId
         if (sGameObjectDisplayInfoStore.LookupEntry(GetGOInfo()->displayId))
             return IsAtInteractDistance(*player, maxRange);
     }
 
+    // 否则根据游戏对象的类型来获取 radius(交互距离)，不同类型的游戏对象其交互类型不同，比如旗帜是 5.5555553f
     return IsAtInteractDistance(*player, GetInteractionDistance());
 }
 
 bool GameObject::IsAtInteractDistance(Position const& pos, float radius) const
 {
+    // 保证游戏对象的 displayId 是有效的
     if (GameObjectDisplayInfoEntry const* displayInfo = sGameObjectDisplayInfoStore.LookupEntry(GetGOInfo()->displayId))
     {
+        // 获取游戏对象的缩放比例
         float scale = GetObjectScale();
 
+        // GeoBoxMin 和 GeoBoxMax 定义了游戏对象原始盒子的两个顶点
+        // 为了判断交互距离，实际使用的边界会在原始几何盒子边界的基础上扩展或缩小一个radius的距离，这样可以形成一个考虑了交互半径的调整后的几何盒子
         float minX = displayInfo->GeoBoxMin.X * scale - radius;
         float minY = displayInfo->GeoBoxMin.Y * scale - radius;
         float minZ = displayInfo->GeoBoxMin.Z * scale - radius;
@@ -2849,14 +2858,25 @@ bool GameObject::IsAtInteractDistance(Position const& pos, float radius) const
         float maxY = displayInfo->GeoBoxMax.Y * scale + radius;
         float maxZ = displayInfo->GeoBoxMax.Z * scale + radius;
 
+        // 空间旋转的考虑
+        //  * 四元数和旋转：游戏对象在游戏世界中的旋转通过四元数（QuaternionData）表示。四元数是一种用于计算3D空间旋转的数学工具，它可以避免万向锁问题，提供了比欧拉角更稳定和灵活的旋转表示方式。
+        //  * 旋转的应用：在这一步中，游戏对象的世界旋转（四元数形式）被转换成G3D::Quat对象。这个四元数将用于后续步骤中的空间变换计算，以确保游戏对象的旋转被准确地考虑在内。
         QuaternionData worldRotation = GetWorldRotation();
         G3D::Quat worldRotationQuat(worldRotation.x, worldRotation.y, worldRotation.z, worldRotation.w);
 
+        // 几何盒子的世界空间变换
+        //  * 构造坐标框架：使用G3D::CoordinateFrame创建一个坐标框架，该框架反映了游戏对象的位置和旋转。G3D::CoordinateFrame提供了一种将局部空间坐标转换为世界空间坐标的方法，这对于准确地描述游戏对象在游戏世界中的位置和朝向是必要的。
+        //  * 几何盒子转换：将调整后的几何盒子（考虑了缩放和交互radius的新几何盒子）转换到世界空间坐标系中。这一步是通过上述构造的坐标框架完成的，确保了几何盒子的位置和朝向准确地反映了游戏对象的实际状态。
+        //
+        // 判断给定位置是否在调整后的几何盒子内
+        //  * 包含性检查：最终步骤是判断给定的位置（Position对象pos）是否位于上一步计算出的世界空间中的几何盒子内部。这一判断基于几何包含性，即检查一个点是否位于一个几何体内部。
+        //  * 结果解释：如果给定位置在调整后的几何盒子内，这意味着玩家与游戏对象在指定的交互radius内，函数返回true表示在交互范围内；如果不在，函数返回false表示不在交互范围内。
         return G3D::CoordinateFrame { { worldRotationQuat }, { GetPositionX(), GetPositionY(), GetPositionZ() } }
                 .toWorldSpace(G3D::Box { { minX, minY, minZ }, { maxX, maxY, maxZ } })
                 .contains({ pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ() });
     }
 
+    // 这一步逻辑和上一帧的 return maxRange * maxRange >= GetExactDistSq(player); 逻辑是一样的，不知道为什么含着泪要这么搞
     return GetExactDist(&pos) <= radius;
 }
 

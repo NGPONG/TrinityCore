@@ -34,6 +34,7 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
 {
     bool const updatesEnabledForThis = DBUpdater<T>::IsEnabled(_updateFlags);
 
+    // 添加开启操作
     _open.push([this, name, updatesEnabledForThis, &pool]() -> bool
     {
         std::string const dbString = sConfigMgr->GetStringDefault(name + "DatabaseInfo", "");
@@ -43,6 +44,7 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
             return false;
         }
 
+        // mysql 线程数，有多少个即创建多少个 MySQLConnection -> DatabaseWorker
         uint8 const asyncThreads = uint8(sConfigMgr->GetIntDefault(name + "Database.WorkerThreads", 1));
         if (asyncThreads < 1 || asyncThreads > 32)
         {
@@ -51,14 +53,19 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
             return false;
         }
 
+        // SyncThread 代表创建 N 个MYSQL连接，每个连接执行都会阻塞，由于网络模块本身是多线程的，当一个连接正在执行的时候就会换另一个连接
+        // AsyncThread 代表创建 N 个MYSQL连接，每个连接又创建一个线程，所以每个连接在执行的时候是不会阻塞的
+
         uint8 const synchThreads = uint8(sConfigMgr->GetIntDefault(name + "Database.SynchThreads", 1));
 
         pool.SetConnectionInfo(dbString, asyncThreads, synchThreads);
+        // 每个 DatabaseWorkrPool 创建X个 SYNC connection 和X个 ASYNC connection
         if (uint32 error = pool.Open())
         {
             // Database does not exist
             if ((error == ER_BAD_DB_ERROR) && updatesEnabledForThis && _autoSetup)
             {
+                // 开启一个子进程(boost::process::child)去执行一段 sql command
                 // Try to create the database and connect again if auto setup is enabled
                 if (DBUpdater<T>::Create(pool) && (!pool.Open()))
                     error = 0;
@@ -73,6 +80,7 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
                 return false;
             }
         }
+        // 添加关闭操作
         // Add the close operation
         _close.push([&pool]
         {
@@ -81,9 +89,13 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
         return true;
     });
 
+    // authserver 不会执行任何操作，仅 worldserver 开启的时候才会填充数据
     // Populate and update only if updates are enabled for this pool
     if (updatesEnabledForThis)
     {
+        // 使用 sql 填充数据库
+        // 对于 auth 数据库使用 sql/base/auth_database.sql 填充
+        // 对于 characters 数据库使用 sql/base/characters_database.sql 填充
         _populate.push([this, name, &pool]() -> bool
         {
             if (!DBUpdater<T>::Populate(pool))
@@ -94,6 +106,7 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
             return true;
         });
 
+        // 处理源sql文件(sql/*.sql)产生变更自动更新的情况
         _update.push([this, name, &pool]() -> bool
         {
             if (!DBUpdater<T>::Update(pool))
@@ -107,6 +120,10 @@ DatabaseLoader& DatabaseLoader::AddDatabase(DatabaseWorkerPool<T>& pool, std::st
 
     _prepare.push([this, name, &pool]() -> bool
     {
+        // DatabaseLoader ->
+        // DatabaseWorkerPool<MySqlConnection<T>>::PrepareStatements ->
+        // MySqlConnection<T>::PrepareStatements ->
+        // T::DoPrepareStatements
         if (!pool.PrepareStatements())
         {
             TC_LOG_ERROR(_logger, "Could not prepare statements of the {} database, see log for details.", name);

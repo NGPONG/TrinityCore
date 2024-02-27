@@ -50,6 +50,7 @@ public:
             return callback.InvokeIfReady();
         }), updateCallbacks.end());
 
+        // 出错的回调再次放进去，等到下次 update 的时候继续执行
         _callbacks.insert(_callbacks.end(), std::make_move_iterator(updateCallbacks.begin()), std::make_move_iterator(updateCallbacks.end()));
     }
 

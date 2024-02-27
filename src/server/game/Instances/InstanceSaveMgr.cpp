@@ -267,6 +267,8 @@ void InstanceSaveManager::LoadInstances()
 {
     uint32 oldMSTime = getMSTime();
 
+    // 删除一些过期的临时的 instance？
+
     // Delete expired instances (Instance related spawns are removed in the following cleanup queries)
     CharacterDatabase.DirectExecute("DELETE i FROM instance i LEFT JOIN instance_reset ir ON mapid = map AND i.difficulty = ir.difficulty "
                                     "WHERE (i.resettime > 0 AND i.resettime < UNIX_TIMESTAMP()) OR (ir.resettime IS NOT NULL AND ir.resettime < UNIX_TIMESTAMP())");
@@ -294,7 +296,6 @@ void InstanceSaveManager::LoadInstances()
     sInstanceSaveMgr->LoadResetTimes();
 
     TC_LOG_INFO("server.loading", ">> Loaded instances in {} ms", GetMSTimeDiffToNow(oldMSTime));
-
 }
 
 void InstanceSaveManager::LoadResetTimes()
@@ -316,8 +317,12 @@ void InstanceSaveManager::LoadResetTimes()
     typedef std::pair<ResetTimeMapDiffInstances::const_iterator, ResetTimeMapDiffInstances::const_iterator> ResetTimeMapDiffInstancesBounds;
     ResetTimeMapDiffInstances mapDiffResetInstances;
 
+    // instance 是副本的意思
+    // difficulty 应该是副本的难度
+
     if (QueryResult result = CharacterDatabase.Query("SELECT id, map, difficulty, resettime FROM instance ORDER BY id ASC"))
     {
+        // 从 db 的数据中初始化 instResetTime, mapDiffResetInstances
         do
         {
             Field* fields = result->Fetch();
@@ -338,6 +343,7 @@ void InstanceSaveManager::LoadResetTimes()
         }
         while (result->NextRow());
 
+        // 如果还未过期这加入到计时器当中，等待某次 Update 的时候调用过期函数
         // schedule the reset times
         for (InstResetTimeMapDiffType::iterator itr = instResetTime.begin(); itr != instResetTime.end(); ++itr)
             if (itr->second.second > now)
@@ -518,6 +524,9 @@ void InstanceSaveManager::Update()
     time_t now = GameTime::GetGameTime();
     time_t t;
 
+    // type 是啥意思？
+
+    // 每一次 update 都遍历一整个队列，然后检查是否有过期的
     while (!m_resetTimeQueue.empty())
     {
         t = m_resetTimeQueue.begin()->first;

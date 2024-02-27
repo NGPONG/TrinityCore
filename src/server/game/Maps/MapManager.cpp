@@ -45,9 +45,12 @@ MapManager::~MapManager() { }
 
 void MapManager::Initialize()
 {
+    // 初始化网格状态机，每种网格有不同的状态？
     Map::InitStateMachine();
 
+    // 默认情况是 1
     int num_threads(sWorld->getIntConfig(CONFIG_NUMTHREADS));
+    // 开启 N 个线程去调用 MapUpdater::WorkerThread 函数
     // Start mtmaps if needed.
     if (num_threads > 0)
         m_updater.activate(num_threads);
@@ -84,6 +87,8 @@ Map* MapManager::CreateBaseMap(uint32 id)
             map->LoadRespawnTimes();
             map->LoadCorpseData();
         }
+
+        TC_LOG_INFO("server.worldserver", "MAP: create base map map_id [{}] instanceable [{}].", id, map->Instanceable());
 
         i_maps[id] = map;
     }
@@ -233,11 +238,14 @@ void MapManager::DoDelayedMovesAndRemoves() { }
 
 bool MapManager::ExistMapAndVMap(uint32 mapid, float x, float y)
 {
+    // 计算 [x,y] 坐标实际坐落在网格的 [gx, gy] 坐标
     GridCoord p = Trinity::ComputeGridCoord(x, y);
 
     int gx = (MAX_NUMBER_OF_GRIDS - 1) - p.x_coord;
     int gy = (MAX_NUMBER_OF_GRIDS - 1) - p.y_coord;
 
+    // ExistMap: 校验是否存在 maps/<map_id><gx><gy>.map 地图文件，且地图文件的魔法数字是否合法
+    //
     return Map::ExistMap(mapid, gx, gy) && Map::ExistVMap(mapid, gx, gy);
 }
 
@@ -321,6 +329,7 @@ void MapManager::RegisterInstanceId(uint32 instanceId)
     // Allocation and sizing was done in InitInstanceIds()
     _freeInstanceIds[instanceId] = false;
 
+    // 此段代码是为了保持 _nextInstanceId 是一个未被使用的 ID
     // Instances are pulled in ascending order from db and nextInstanceId is initialized with 1,
     // so if the instance id is used, increment until we find the first unused one for a potential new instance
     if (_nextInstanceId == instanceId)

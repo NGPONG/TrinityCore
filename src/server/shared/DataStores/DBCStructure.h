@@ -740,6 +740,8 @@ struct GameObjectArtKitEntry
 
 struct GameObjectDisplayInfoEntry
 {
+    // GeoBox: geographic box
+
     uint32 ID;                                              // 0
     char const* ModelName;                                  // 1
     //uint32 Sound[10];                                     // 2-11

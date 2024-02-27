@@ -2554,6 +2554,7 @@ void SpellMgr::LoadSpellInfoStore()
     UnloadSpellInfoStore();
     mSpellInfoMap.resize(sSpellStore.GetNumRows(), nullptr);
 
+    // 通过 reocrd 来初始化 mSpellInfoMap 中的一些成员
     for (SpellEntry const* spellEntry : sSpellStore)
         mSpellInfoMap[spellEntry->ID] = new SpellInfo(spellEntry);
 
@@ -2562,6 +2563,7 @@ void SpellMgr::LoadSpellInfoStore()
         if (!mSpellInfoMap[spellIndex])
             continue;
 
+        // 校验法术效果初始化后的值是否正确
         for (SpellEffectInfo const& spellEffectInfo : mSpellInfoMap[spellIndex]->GetEffects())
         {
             //ASSERT(effect.EffectIndex < MAX_SPELL_EFFECTS, "MAX_SPELL_EFFECTS must be at least %u", effect.EffectIndex + 1);
